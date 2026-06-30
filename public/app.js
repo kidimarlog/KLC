@@ -14,9 +14,11 @@ async function logout(){await api("/api/logout",{method:"POST"});location.reload
 async function refresh(){waves=await api("/api/waves");if(me.role==="admin"){users=await api("/api/users");analytics=await api("/api/analytics");renderUsers();renderAssign();renderStatus();renderAnalytics();}renderWorkerPage();}
 function counts(w){const c={open:0,picked:0,alt_mix:0,not_found:0,total:0,done:0};(w.items||[]).forEach(i=>{c[i.status]=(c[i.status]||0)+Number(i.qty||1);c.total+=Number(i.qty||1);if(i.status!=="open")c.done+=Number(i.qty||1);});return c;}
 function statusLabel(s){return{open:"פתוח",assigned:"משויך",active:"פעיל",completed:"הושלם",pallet_full:"משטח מלא",picked:"לוקט",alt_mix:"לוקט מיקס אחר",not_found:"לא נמצא"}[s]||s;}
+function percentForWave(w){const c=counts(w);return c.total?Math.round((c.done/c.total)*100):0;}
+function progress(p){return `<div class="progress"><div style="width:${p}%"></div></div>${p}%`;}
 
 function renderWorkerPage(){
-  const selectedId = workerWaveSelect.value;
+  const selectedId=workerWaveSelect.value;
   workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
   const w=waves.find(x=>x.id===selectedId)||waves[0];
   if(!w){workerCards.innerHTML="";workerActions.innerHTML="";workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;nextWave.innerHTML="";return;}
@@ -35,23 +37,48 @@ async function uploadPicking(){const files=[...pickingFiles.files];if(!files.len
 async function uploadLocations(kind){const input=kind==="daily"?dailyLocations:melangeLocations;if(!input.files[0])return alert("בחר קובץ מיקומים");const fd=new FormData();fd.append("file",input.files[0]);const res=await fetch(`/api/upload/locations/${kind}`,{method:"POST",body:fd});const data=await res.json();if(!res.ok)return alert(data.error||"שגיאה");alert(`עודכנו ${data.count} מיקומים`);await refresh();}
 async function createUser(){try{await api("/api/users",{method:"POST",body:JSON.stringify({username:newUsername.value,code:newCode.value,role:newRole.value})});newUsername.value="";newCode.value="";await refresh();}catch(e){alert(e.message);}}
 async function toggleUser(id,active){await api(`/api/users/${id}`,{method:"PATCH",body:JSON.stringify({active:!active})});await refresh();}
-function renderUsers(){usersTable.innerHTML=table(["שם משתמש","קוד","הרשאה","פעיל","פעולה"],users.map(u=>[esc(u.username),esc(u.code_plain),esc(u.role_label||(isWorker(u)?"עובד":"מנהל")),isActive(u)?"כן":"לא",u.username==="admin"?"":`<button class="gray" onclick="toggleUser(${u.id},${isActive(u)})">${isActive(u)?"השבת":"הפעל"}</button>`]));}
+async function editUser(id,currentName,currentCode,currentRole){
+  const username=prompt("שם משתמש:",currentName); if(!username) return;
+  const code=prompt("קוד כניסה:",currentCode||""); if(!code) return;
+  const role=prompt("הרשאה: worker או admin",currentRole||"worker") || currentRole;
+  await api(`/api/users/${id}`,{method:"PATCH",body:JSON.stringify({username,code,role})});
+  await refresh();
+}
+async function deleteUser(id,name){if(!confirm(`למחוק את היוזר ${name}? גלים שמשויכים אליו יחזרו ללא שיוך.`))return;const res=await fetch(`/api/users/${id}`,{method:"DELETE"});const data=await res.json().catch(()=>({}));if(!res.ok)return alert(data.error||"שגיאה במחיקת יוזר");await refresh();}
+function renderUsers(){usersTable.innerHTML=table(["שם משתמש","קוד","הרשאה","פעיל","פעולה"],users.map(u=>[esc(u.username),esc(u.code_plain),esc(u.role_label||(isWorker(u)?"עובד":"מנהל")),isActive(u)?"כן":"לא",u.username==="admin"?"":`<div class="actions"><button class="gray" onclick="toggleUser(${u.id},${isActive(u)})">${isActive(u)?"השבת":"הפעל"}</button><button class="orange" onclick="editUser(${u.id},'${esc(u.username)}','${esc(u.code_plain)}','${esc(u.role)}')">ערוך</button><button class="red" onclick="deleteUser(${u.id},'${esc(u.username)}')">מחק</button></div>`]));}
 
 function renderAssign(){
-  const openWaves=waves.filter(w=>!["completed","pallet_full"].includes(w.status));
+  const openWaves=waves.filter(w=>!["completed","pallet_full"].includes(w.status) && !w.assigned_to);
   const activeWorkers=users.filter(u=>isWorker(u)&&isActive(u));
-  assignWaveSelect.innerHTML=openWaves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)} | ${w.items.length} שורות</option>`).join("")||"<option value='__none__'>אין גלים פתוחים</option>";
+  assignWaveSelect.innerHTML=openWaves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)} | ${w.items.length} שורות</option>`).join("")||"<option value='__none__'>אין גלים פתוחים ללא שיוך</option>";
   assignUserSelect.innerHTML=activeWorkers.map(u=>`<option value="${esc(u.username)}">${esc(u.username)}</option>`).join("")||"<option value='__none__'>אין עובדים פעילים</option>";
   assignTable.innerHTML=table(["גל","סוג","חנות","סטטוס","עובד","שורות"],waves.map(w=>[esc(w.wave_no),esc(w.source_label),esc(w.store),statusLabel(w.status),esc(w.assigned_to||"לא שויך"),w.items.length]));
 }
-async function assignSelectedWave(){
-  if(assignUserSelect.value==="__none__")return alert("אין עובד פעיל לשיוך");
-  if(assignWaveSelect.value==="__none__")return alert("אין גל פתוח לשיוך");
-  await api("/api/assign",{method:"POST",body:JSON.stringify({waveId:assignWaveSelect.value,username:assignUserSelect.value})});
-  await refresh();
+async function assignSelectedWave(){if(assignUserSelect.value==="__none__")return alert("אין עובד פעיל לשיוך");if(assignWaveSelect.value==="__none__")return alert("אין גל פתוח ללא שיוך");try{await api("/api/assign",{method:"POST",body:JSON.stringify({waveId:assignWaveSelect.value,username:assignUserSelect.value})});await refresh();}catch(e){alert(e.message);}}
+async function unassignWave(waveId){if(!confirm("להסיר שיוך מהגל?"))return;await api("/api/wave/unassign",{method:"POST",body:JSON.stringify({waveId})});await refresh();}
+async function deleteWave(waveId,waveNo){if(!confirm(`למחוק את גל ${waveNo}? כל השורות שלו יימחקו.`))return;const res=await fetch(`/api/waves/${waveId}`,{method:"DELETE"});const data=await res.json().catch(()=>({}));if(!res.ok)return alert(data.error||"שגיאה במחיקת גל");await refresh();}
+function renderStatus(){
+  const all=waves.flatMap(w=>w.items.map(i=>({...i,wave:w}))), total=all.reduce((s,i)=>s+Number(i.qty||1),0), done=all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+  statusCards.innerHTML=`<div class="card"><b>${waves.length}</b><span>גלים</span></div><div class="card"><b>${total}</b><span>יחידות</span></div><div class="card"><b>${done}</b><span>טופלו</span></div><div class="card"><b>${total-done}</b><span>נשאר</span></div>`;
+  statusTable.innerHTML=table(["גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","אחוז","פעולה"],waves.map(w=>{const c=counts(w),p=percentForWave(w);return[esc(w.wave_no),esc(w.source_label),esc(w.store),esc(w.assigned_to||""),statusLabel(w.status),c.total,c.done,progress(p),`<div class="actions">${w.assigned_to?`<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`:""}<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק גל</button></div>`];}));
+  const unassigned=waves.filter(w=>!w.assigned_to && !["completed","pallet_full"].includes(w.status));
+  unassignedWavesTable.innerHTML=table(["גל","סוג","חנות","סטטוס","שורות","פעולה"],unassigned.map(w=>[esc(w.wave_no),esc(w.source_label),esc(w.store),statusLabel(w.status),w.items.length,`<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק גל</button>`]));
+  const active=waves.filter(w=>w.assigned_to && !["completed","pallet_full"].includes(w.status));
+  activeWavesTable.innerHTML=table(["גל","סוג","חנות","עובד","יחידות","טופלו","אחוז","פעולה"],active.map(w=>{const c=counts(w),p=percentForWave(w);return[esc(w.wave_no),esc(w.source_label),esc(w.store),esc(w.assigned_to),c.total,c.done,progress(p),`<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`];}));
 }
-function renderStatus(){const all=waves.flatMap(w=>w.items.map(i=>({...i,wave:w}))), total=all.reduce((s,i)=>s+Number(i.qty||1),0), done=all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);statusCards.innerHTML=`<div class="card"><b>${waves.length}</b><span>גלים</span></div><div class="card"><b>${total}</b><span>יחידות</span></div><div class="card"><b>${done}</b><span>טופלו</span></div><div class="card"><b>${total-done}</b><span>נשאר</span></div>`;statusTable.innerHTML=table(["גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","נשאר"],waves.map(w=>{const c=counts(w);return[esc(w.wave_no),esc(w.source_label),esc(w.store),esc(w.assigned_to||""),statusLabel(w.status),c.total,c.done,c.total-c.done];}));}
-async function loadImports(){if(!document.getElementById("importsTable"))return;const rows=await api("/api/imports");importsTable.innerHTML=table(["קובץ","סוג","נטען בתאריך","שורות","טופל","אחוז","סטטוס","פעולה"],rows.map(r=>[esc(r.filename),esc(r.source_label),formatIL(r.created_at),r.total_items||r.rows_count,`${r.done_items||0}/${r.total_items||0}`,`<div class="progress"><div style="width:${r.percent||0}%"></div></div>${r.percent||0}%`,r.completed?"לוקט במלואו":"בתהליך / פתוח",`<button class="red" onclick="deleteImport('${r.id}')">מחק קובץ</button>`]));}
+async function loadImports(){if(!document.getElementById("importsTable"))return;const rows=await api("/api/imports");importsTable.innerHTML=table(["קובץ","סוג","נטען בתאריך","שורות","טופל","אחוז","סטטוס","פעולה"],rows.map(r=>[esc(r.filename),esc(r.source_label),formatIL(r.created_at),r.total_items||r.rows_count,`${r.done_items||0}/${r.total_items||0}`,progress(r.percent||0),r.completed?"לוקט במלואו":"בתהליך / פתוח",`<button class="red" onclick="deleteImport('${r.id}')">מחק קובץ</button>`]));}
 async function deleteImport(id){if(!confirm("למחוק את הקובץ והשורות שנוצרו ממנו? פעולה זו מיועדת למחיקת קובצי בדיקה."))return;await fetch(`/api/imports/${id}`,{method:"DELETE"});await refresh();await loadImports();}
-function renderAnalytics(){if(me?.role!=="admin")return;const old=filterWorker.value||"all";filterWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join("");filterWorker.value=old;let rows=[...analytics];const worker=filterWorker.value||"all",st=filterStatus.value||"all",dates=filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);if(worker!=="all")rows=rows.filter(r=>r.picked_by===worker);if(st!=="all")rows=rows.filter(r=>r.status===st);if(dates.length)rows=rows.filter(r=>dates.some(d=>(r.picked_at||"").startsWith(d)));analyticsCards.innerHTML=`<div class="card"><b>${rows.length}</b><span>שורות</span></div><div class="card"><b>${rows.filter(r=>r.status==="picked").length}</b><span>לוקט</span></div><div class="card"><b>${rows.filter(r=>r.status==="alt_mix").length}</b><span>מיקס אחר</span></div><div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div>`;analyticsTable.innerHTML=table(["גל","סוג","חנות","עובד","דגם","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","תאריך"],rows.map(r=>[esc(r.wave_no),esc(r.source_label),esc(r.store),esc(r.picked_by||""),esc(r.model),esc(r.mix),r.qty,esc(r.location||""),statusLabel(r.status),esc(r.actual_mix||""),esc(formatIL(r.picked_at)||"")]),rows.map(r=>r.status));}
+function renderAnalytics(){
+  if(me?.role!=="admin")return;
+  const old=filterWorker.value||"all";filterWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join("");filterWorker.value=old;
+  let rows=[...analytics];const worker=filterWorker.value||"all",st=filterStatus.value||"all",dates=filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);
+  if(worker!=="all")rows=rows.filter(r=>r.picked_by===worker||r.assigned_to===worker);
+  if(st!=="all")rows=rows.filter(r=>r.status===st);
+  if(dates.length)rows=rows.filter(r=>dates.some(d=>(r.picked_at||"").startsWith(d)));
+  analyticsCards.innerHTML=`<div class="card"><b>${rows.length}</b><span>שורות</span></div><div class="card"><b>${rows.filter(r=>r.status==="picked").length}</b><span>לוקט</span></div><div class="card"><b>${rows.filter(r=>r.status==="alt_mix").length}</b><span>מיקס אחר</span></div><div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div>`;
+  const byWorker={};
+  analytics.forEach(r=>{const name=r.picked_by||r.assigned_to||"לא שויך";if(worker!=="all"&&name!==worker)return;if(!byWorker[name])byWorker[name]={rows:0,pickedRows:0,waves:new Set()};byWorker[name].rows++;if(r.status!=="open")byWorker[name].pickedRows++;if(r.wave_id)byWorker[name].waves.add(r.wave_id);});
+  workerSummaryTable.innerHTML=table(["עובד","שורות משויכות/קיימות","שורות שטופלו","גלי ליקוט"],Object.entries(byWorker).map(([name,o])=>[esc(name),o.rows,o.pickedRows,o.waves.size]));
+  analyticsTable.innerHTML=table(["גל","סוג","חנות","עובד","דגם","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","תאריך"],rows.map(r=>[esc(r.wave_no),esc(r.source_label),esc(r.store),esc(r.picked_by||r.assigned_to||""),esc(r.model),esc(r.mix),r.qty,esc(r.location||""),statusLabel(r.status),esc(r.actual_mix||""),esc(formatIL(r.picked_at)||"")]),rows.map(r=>r.status));
+}
 boot();setInterval(()=>{if(me)refresh();},15000);
