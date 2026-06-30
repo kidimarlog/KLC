@@ -40,3 +40,34 @@ function renderAnalytics(){if(me?.role!=="admin"||!document.getElementById("filt
 function groupRows(rows,keyFn){const out={};rows.forEach(r=>{const k=keyFn(r)||"לא ידוע";if(!out[k])out[k]={total:0,done:0,waves:new Set()};out[k].total++;if(r.status!=="open")out[k].done++;if(r.wave_id)out[k].waves.add(r.wave_id);});return Object.entries(out).map(([k,v])=>[esc(k),v.total,v.done,v.waves.size,progress(v.total?Math.round(v.done/v.total*100):0)]);}
 function renderDashboard(){if(me?.role!=="admin"||!document.getElementById("dashCards"))return;const old=dashWorker.value||"all";dashWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join("");dashWorker.value=old;let rows=[...analytics];if(dashWorker.value!=="all")rows=rows.filter(r=>r.picked_by===dashWorker.value||r.assigned_to===dashWorker.value);if(dashDate.value)rows=rows.filter(r=>(r.picked_at||"").startsWith(dashDate.value));if(dashStore.value)rows=rows.filter(r=>String(r.store||"").includes(dashStore.value));const total=rows.length,done=rows.filter(r=>r.status!=="open").length;dashCards.innerHTML=`<div class="card"><b>${total}</b><span>שורות</span></div><div class="card"><b>${done}</b><span>טופלו</span></div><div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div><div class="card"><b>${new Set(rows.map(r=>r.wave_id)).size}</b><span>גלים</span></div>`;dashByWorker.innerHTML=table(["עובד","שורות","טופלו","גלים","אחוז"],groupRows(rows,r=>r.picked_by||r.assigned_to||"לא שויך"));dashByStore.innerHTML=table(["חנות","שורות","טופלו","גלים","אחוז"],groupRows(rows,r=>r.store));dashByDate.innerHTML=table(["תאריך","שורות","טופלו","גלים","אחוז"],groupRows(rows,r=>shortDate(r.picked_at)||"ללא תאריך"));}
 boot();setInterval(()=>{if(me)refresh();},15000);
+// KLC v1.5.1 PATCH - מיון מסך שיוך גלים לפי מספר חנות
+// להדביק בסוף public/app.js
+
+function storeSortNumber(store){
+  const m = String(store || "").match(/\d+/);
+  return m ? Number(m[0]) : 999999999;
+}
+
+function renderAssign(){
+  const openWaves = waves
+    .filter(w => !["completed","pallet_full"].includes(w.status) && !w.assigned_to)
+    .sort((a,b) => {
+      const na = storeSortNumber(a.store);
+      const nb = storeSortNumber(b.store);
+      if (na !== nb) return na - nb;
+      return String(a.store || "").localeCompare(String(b.store || ""), "he");
+    });
+
+  assignTable.innerHTML = table(
+    ["גל","סוג","חנות","סטטוס","עובד","שורות","שיוך"],
+    openWaves.map(w => [
+      esc(w.wave_no),
+      esc(w.source_label),
+      esc(w.store),
+      statusLabel(w.status),
+      esc(w.assigned_to || "לא שויך"),
+      w.items.length,
+      `<div class="actions">${workerDropdown(w.id)}<button onclick="assignWaveFromRow('${w.id}')">שייך</button></div>`
+    ])
+  );
+}
