@@ -1,0 +1,183 @@
+let me=null, waves=[], users=[], analytics=[];
+const MIXES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+async function api(url, options={}) {
+  const res = await fetch(url, { headers: {"Content-Type":"application/json"}, ...options });
+  const data = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(data.error || "שגיאה");
+  return data;
+}
+function esc(v){return String(v ?? "").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
+function table(headers, rows, classes=[]) {
+  if (!rows.length) return `<div class="panel">אין נתונים להצגה</div>`;
+  return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>`+
+    rows.map((r,i)=>`<tr class="${classes[i]||""}">${r.map(c=>`<td>${c ?? ""}</td>`).join("")}</tr>`).join("")+
+    `</tbody></table>`;
+}
+function showPage(id){
+  document.querySelectorAll(".page").forEach(p=>p.classList.toggle("show", p.id===id));
+}
+async function boot(){
+  const res = await api("/api/me").catch(()=>({user:null}));
+  me = res.user;
+  document.getElementById("loginScreen").classList.toggle("hidden", !!me);
+  document.getElementById("appScreen").classList.toggle("hidden", !me);
+  if (!me) return;
+  document.getElementById("meBox").innerHTML = `מחובר: <b>${esc(me.username)}</b><br>${me.role==="admin"?"מנהל":"עובד"}`;
+  document.querySelectorAll(".admin-only").forEach(x=>x.style.display = me.role==="admin" ? "block" : "none");
+  await refresh();
+}
+async function login(){
+  try{
+    await api("/api/login", {method:"POST", body:JSON.stringify({username:loginUsername.value, code:loginCode.value})});
+    await boot();
+  }catch(e){ alert(e.message); }
+}
+async function logout(){ await api("/api/logout", {method:"POST"}); location.reload(); }
+
+async function refresh(){
+  waves = await api("/api/waves");
+  if (me.role==="admin"){
+    users = await api("/api/users");
+    analytics = await api("/api/analytics");
+    renderUsers(); renderAssign(); renderStatus(); renderAnalytics();
+  }
+  renderWorkerPage();
+}
+function counts(w){
+  const c={open:0,picked:0,alt_mix:0,not_found:0,total:0,done:0};
+  (w.items||[]).forEach(i=>{
+    c[i.status]=(c[i.status]||0)+Number(i.qty||1);
+    c.total+=Number(i.qty||1);
+    if(i.status!=="open") c.done+=Number(i.qty||1);
+  });
+  return c;
+}
+function statusLabel(s){
+  return {open:"פתוח",assigned:"משויך",active:"פעיל",completed:"הושלם",pallet_full:"משטח מלא",picked:"לוקט",alt_mix:"לוקט מיקס אחר",not_found:"לא נמצא"}[s]||s;
+}
+function renderWorkerPage(){
+  workerWaveSelect.innerHTML = waves.map(w=>`<option value="${w.id}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("") || "<option>אין גלי ליקוט</option>";
+  const w = waves.find(x=>x.id===workerWaveSelect.value) || waves[0];
+  if(!w){ workerCards.innerHTML=""; workerActions.innerHTML=""; workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`; return; }
+  workerWaveSelect.value = w.id;
+  const idx = waves.findIndex(x=>x.id===w.id);
+  const next = waves[idx+1];
+  nextWave.innerHTML = next ? `הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות` : "אין גל הבא כרגע";
+  const c = counts(w);
+  workerCards.innerHTML = `<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div>
+  <div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div>
+  <div class="card"><b>${esc(w.store)}</b><span>חנות</span></div>
+  <div class="card"><b>${c.total}</b><span>יחידות</span></div>
+  <div class="card"><b>${c.done}</b><span>טופלו</span></div>
+  <div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+  workerActions.innerHTML = `<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+  workerItems.innerHTML = table(["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"], w.items.map(i=>[
+    esc(i.location || "ללא מיקום"),
+    esc(i.model),
+    esc(i.mix || "A"),
+    esc(i.qty || 1),
+    `${statusLabel(i.status)}<br><span class="small">${esc(i.picked_at||"")}</span>`,
+    `<div class="actions"><button class="green" onclick="setItemStatus('${i.id}','picked')">לוקט</button>
+    <select id="mix_${i.id}" style="width:80px">${MIXES.map(m=>`<option>${m}</option>`).join("")}</select>
+    <button class="orange" onclick="setItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button>
+    <button class="red" onclick="setItemStatus('${i.id}','not_found')">לא נמצא</button></div>`
+  ]), w.items.map(i=>i.status));
+}
+async function setItemStatus(itemId, status, actualMix=""){
+  await api("/api/item/status", {method:"POST", body:JSON.stringify({itemId,status,actualMix})});
+  await refresh();
+}
+async function completeWave(waveId){
+  const res = await api("/api/wave/complete", {method:"POST", body:JSON.stringify({waveId})});
+  alert(res.message || "ליקוט הושלם - סגור משטח");
+  await refresh();
+}
+async function palletFull(waveId){
+  const res = await api("/api/wave/pallet-full", {method:"POST", body:JSON.stringify({waveId})});
+  alert("נוצר גל המשך: " + res.newWaveNo);
+  await refresh();
+}
+async function uploadPicking(){
+  const files = [...pickingFiles.files];
+  if(!files.length) return alert("בחר קבצים");
+  const fd = new FormData();
+  files.forEach(f=>fd.append("files", f));
+  const res = await fetch("/api/upload/picking", {method:"POST", body:fd});
+  const data = await res.json();
+  if(!res.ok) return alert(data.error || "שגיאה");
+  uploadResult.innerHTML = `<div class="panel">נטענו ${data.added} שורות. נוצרו ${data.created} גלים חדשים. אוחדו ${data.merged} גלים פתוחים מאותו סוג קובץ.</div>`;
+  await refresh();
+}
+async function uploadLocations(kind){
+  const input = kind==="daily" ? dailyLocations : melangeLocations;
+  if(!input.files[0]) return alert("בחר קובץ מיקומים");
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  const res = await fetch(`/api/upload/locations/${kind}`, {method:"POST", body:fd});
+  const data = await res.json();
+  if(!res.ok) return alert(data.error || "שגיאה");
+  alert(`עודכנו ${data.count} מיקומים`);
+  await refresh();
+}
+async function createUser(){
+  try{
+    await api("/api/users", {method:"POST", body:JSON.stringify({username:newUsername.value, code:newCode.value, role:newRole.value})});
+    newUsername.value=""; newCode.value="";
+    await refresh();
+  }catch(e){ alert(e.message); }
+}
+async function toggleUser(id, active){
+  await api(`/api/users/${id}`, {method:"PATCH", body:JSON.stringify({active:!active})});
+  await refresh();
+}
+function renderUsers(){
+  usersTable.innerHTML = table(["שם משתמש","קוד","הרשאה","פעיל","פעולה"], users.map(u=>[
+    esc(u.username), esc(u.code_plain), u.role==="admin"?"מנהל":"עובד", u.active?"כן":"לא",
+    u.username==="admin" ? "" : `<button class="gray" onclick="toggleUser(${u.id},${u.active})">${u.active?"השבת":"הפעל"}</button>`
+  ]));
+}
+function renderAssign(){
+  const openWaves = waves.filter(w=>!["completed","pallet_full"].includes(w.status));
+  assignWave.innerHTML = openWaves.map(w=>`<option value="${w.id}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)} | ${w.items.length} שורות</option>`).join("") || "<option>אין גלים פתוחים</option>";
+  assignUser.innerHTML = users.filter(u=>u.role==="worker" && u.active).map(u=>`<option>${esc(u.username)}</option>`).join("") || "<option>אין עובדים פעילים</option>";
+  assignTable.innerHTML = table(["גל","סוג","חנות","סטטוס","עובד","שורות"], waves.map(w=>[esc(w.wave_no), esc(w.source_label), esc(w.store), statusLabel(w.status), esc(w.assigned_to||"לא שויך"), w.items.length]));
+}
+async function assignWave(){
+  await api("/api/assign", {method:"POST", body:JSON.stringify({waveId:assignWave.value, username:assignUser.value})});
+  await refresh();
+}
+function renderStatus(){
+  const all = waves.flatMap(w=>w.items.map(i=>({...i,wave:w})));
+  const total = all.reduce((s,i)=>s+Number(i.qty||1),0);
+  const done = all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+  statusCards.innerHTML = `<div class="card"><b>${waves.length}</b><span>גלים</span></div>
+  <div class="card"><b>${total}</b><span>יחידות</span></div>
+  <div class="card"><b>${done}</b><span>טופלו</span></div>
+  <div class="card"><b>${total-done}</b><span>נשאר</span></div>`;
+  statusTable.innerHTML = table(["גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","נשאר"], waves.map(w=>{
+    const c=counts(w); return [esc(w.wave_no), esc(w.source_label), esc(w.store), esc(w.assigned_to||""), statusLabel(w.status), c.total, c.done, c.total-c.done];
+  }));
+}
+function renderAnalytics(){
+  if(me?.role!=="admin") return;
+  const old = filterWorker.value || "all";
+  filterWorker.innerHTML = `<option value="all">כל העובדים</option>` + users.map(u=>`<option>${esc(u.username)}</option>`).join("");
+  filterWorker.value = old;
+  let rows = [...analytics];
+  const worker = filterWorker.value || "all";
+  const st = filterStatus.value || "all";
+  const dates = filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);
+  if(worker!=="all") rows = rows.filter(r=>r.picked_by===worker);
+  if(st!=="all") rows = rows.filter(r=>r.status===st);
+  if(dates.length) rows = rows.filter(r=>dates.some(d=>(r.picked_at||"").startsWith(d)));
+  analyticsCards.innerHTML = `<div class="card"><b>${rows.length}</b><span>שורות</span></div>
+  <div class="card"><b>${rows.filter(r=>r.status==="picked").length}</b><span>לוקט</span></div>
+  <div class="card"><b>${rows.filter(r=>r.status==="alt_mix").length}</b><span>מיקס אחר</span></div>
+  <div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div>`;
+  analyticsTable.innerHTML = table(["גל","סוג","חנות","עובד","דגם","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","תאריך"], rows.map(r=>[
+    esc(r.wave_no), esc(r.source_label), esc(r.store), esc(r.picked_by||""), esc(r.model), esc(r.mix), r.qty, esc(r.location||""), statusLabel(r.status), esc(r.actual_mix||""), esc(r.picked_at||"")
+  ]), rows.map(r=>r.status));
+}
+boot();
+setInterval(()=>{ if(me) refresh(); }, 15000);

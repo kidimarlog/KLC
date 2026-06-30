@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KLC</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<section id="loginScreen" class="login-screen">
+  <div class="login-card">
+    <h1>KLC</h1>
+    <p>Kidichic Logistics Center</p>
+    <input id="loginUsername" placeholder="שם משתמש" />
+    <input id="loginCode" type="password" placeholder="קוד כניסה" />
+    <button onclick="login()">כניסה</button>
+    <div class="hint">כניסה ראשונית: <b>admin</b> / <b>1234</b></div>
+  </div>
+</section>
+
+<section id="appScreen" class="app hidden">
+  <aside>
+    <h1>KLC</h1>
+    <div id="meBox" class="me"></div>
+    <button class="nav active" onclick="showPage('workerPage')">הליקוטים שלי</button>
+    <button class="nav admin-only" onclick="showPage('uploadPage')">טעינת קבצים</button>
+    <button class="nav admin-only" onclick="showPage('assignPage')">שיוך גלים</button>
+    <button class="nav admin-only" onclick="showPage('usersPage')">יוזרים</button>
+    <button class="nav admin-only" onclick="showPage('statusPage')">סטאטוס</button>
+    <button class="nav admin-only" onclick="showPage('analyticsPage')">ניתוח נתונים</button>
+    <button class="logout" onclick="logout()">יציאה</button>
+  </aside>
+
+  <main>
+    <section id="workerPage" class="page show">
+      <h2>הליקוטים שלי</h2>
+      <select id="workerWaveSelect" onchange="renderWorkerPage()"></select>
+      <div id="nextWave" class="notice"></div>
+      <div id="workerCards" class="cards"></div>
+      <div id="workerActions"></div>
+      <div id="workerItems"></div>
+    </section>
+
+    <section id="uploadPage" class="page">
+      <h2>טעינת קבצים</h2>
+      <div class="panel">
+        <h3>קבצי ליקוט</h3>
+        <p>אפשר לבחור כמה אקסלים במקביל. כל סוג קובץ יתאחד רק עם אותו סוג קובץ: השלמת מכנסיים, ליקוט יומי, מלאנז׳.</p>
+        <input id="pickingFiles" type="file" multiple accept=".xlsx,.xls,.csv" />
+        <button onclick="uploadPicking()">טען קבצי ליקוט</button>
+      </div>
+      <div class="grid">
+        <div class="panel">
+          <h3>מיקומים לליקוט יומי</h3>
+          <p>קוד פריט = דגם, תאור = מיקום</p>
+          <input id="dailyLocations" type="file" accept=".xlsx,.xls,.csv" />
+          <button onclick="uploadLocations('daily')">טען מיקומים</button>
+        </div>
+        <div class="panel">
+          <h3>מיקומים מלאנז׳</h3>
+          <p>גליון “מתעדכן קבוע”: דגם = 6 תווים, מיקום = מיקום</p>
+          <input id="melangeLocations" type="file" accept=".xlsx,.xls,.csv" />
+          <button onclick="uploadLocations('melange')">טען מיקומים</button>
+        </div>
+      </div>
+      <div id="uploadResult"></div>
+    </section>
+
+    <section id="assignPage" class="page">
+      <h2>שיוך גלים לעובדים</h2>
+      <div class="panel row">
+        <select id="assignWave"></select>
+        <select id="assignUser"></select>
+        <button onclick="assignWave()">שייך</button>
+      </div>
+      <div id="assignTable"></div>
+    </section>
+
+    <section id="usersPage" class="page">
+      <h2>ניהול יוזרים</h2>
+      <div class="panel">
+        <input id="newUsername" placeholder="שם משתמש" />
+        <input id="newCode" placeholder="קוד כניסה" />
+        <select id="newRole">
+          <option value="worker">עובד</option>
+          <option value="admin">מנהל</option>
+        </select>
+        <button onclick="createUser()">צור יוזר</button>
+      </div>
+      <div id="usersTable"></div>
+    </section>
+
+    <section id="statusPage" class="page">
+      <h2>סטאטוס בזמן אמת</h2>
+      <div id="statusCards" class="cards"></div>
+      <div id="statusTable"></div>
+    </section>
+
+    <section id="analyticsPage" class="page">
+      <h2>ניתוח נתונים</h2>
+      <div class="panel filters">
+        <select id="filterWorker" onchange="renderAnalytics()"></select>
+        <select id="filterStatus" onchange="renderAnalytics()">
+          <option value="all">כל הסטטוסים</option>
+          <option value="picked">לוקט</option>
+          <option value="alt_mix">לוקט מיקס אחר</option>
+          <option value="not_found">לא נמצא</option>
+          <option value="open">פתוח</option>
+        </select>
+        <input id="filterDates" placeholder="תאריכים לבחירה מרובה: 2026-06-29,2026-06-30" oninput="renderAnalytics()" />
+        <button onclick="window.location='/api/analytics/export'">ייצוא לאקסל</button>
+      </div>
+      <div id="analyticsCards" class="cards"></div>
+      <div id="analyticsTable"></div>
+    </section>
+  </main>
+</section>
+<script src="/app.js"></script>
+</body>
+</html>
