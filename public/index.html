@@ -76,14 +76,20 @@
     </section>
 
     <section id="assignPage" class="page">
-      <h2>שיוך גלים לעובדים</h2>
-      <div class="panel row">
-        <select id="assignWave"></select>
-        <select id="assignUser"></select>
-        <button onclick="assignWave()">שייך</button>
-      </div>
-      <div id="assignTable"></div>
-    </section>
+    <h2>שיוך גלים לעובדים</h2>
+
+    <div class="panel row">
+        <select id="assignUserSelect"></select>
+
+        <select id="assignWaveSelect"></select>
+
+        <button onclick="assignSelectedWave()">
+            שייך
+        </button>
+    </div>
+
+    <div id="assignTable"></div>
+</section>
 
     <section id="usersPage" class="page">
       <h2>ניהול יוזרים</h2>
