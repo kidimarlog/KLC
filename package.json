@@ -1,11 +1,10 @@
 {
-  "name": "klc-web-full",
-  "version": "1.0.0",
-  "description": "KLC - Kidichic Logistics Center web app",
+  "name": "klc-web-update",
+  "version": "2.1.0",
+  "description": "KLC update: workers fix, imports screen, reset item status",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

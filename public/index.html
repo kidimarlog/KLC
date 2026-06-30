@@ -24,6 +24,7 @@
     <div id="meBox" class="me"></div>
     <button class="nav active" onclick="showPage('workerPage')">הליקוטים שלי</button>
     <button class="nav admin-only" onclick="showPage('uploadPage')">טעינת קבצים</button>
+    <button class="nav admin-only" onclick="showPage('importsPage')">קבצים שנטענו</button>
     <button class="nav admin-only" onclick="showPage('assignPage')">שיוך גלים</button>
     <button class="nav admin-only" onclick="showPage('usersPage')">יוזרים</button>
     <button class="nav admin-only" onclick="showPage('statusPage')">סטאטוס</button>
@@ -45,7 +46,7 @@
       <h2>טעינת קבצים</h2>
       <div class="panel">
         <h3>קבצי ליקוט</h3>
-        <p>אפשר לבחור כמה אקסלים במקביל. כל סוג קובץ יתאחד רק עם אותו סוג קובץ: השלמת מכנסיים, ליקוט יומי, מלאנז׳.</p>
+        <p>כל סוג קובץ יתאחד רק עם אותו סוג קובץ: השלמת מכנסיים, ליקוט יומי, מלאנז׳.</p>
         <input id="pickingFiles" type="file" multiple accept=".xlsx,.xls,.csv" />
         <button onclick="uploadPicking()">טען קבצי ליקוט</button>
       </div>
@@ -64,6 +65,14 @@
         </div>
       </div>
       <div id="uploadResult"></div>
+    </section>
+
+    <section id="importsPage" class="page">
+      <h2>קבצים שנטענו</h2>
+      <div class="panel">
+        <button onclick="loadImports()">רענן רשימה</button>
+      </div>
+      <div id="importsTable"></div>
     </section>
 
     <section id="assignPage" class="page">
@@ -107,7 +116,7 @@
           <option value="not_found">לא נמצא</option>
           <option value="open">פתוח</option>
         </select>
-        <input id="filterDates" placeholder="תאריכים לבחירה מרובה: 2026-06-29,2026-06-30" oninput="renderAnalytics()" />
+        <input id="filterDates" placeholder="תאריכים: 2026-06-29,2026-06-30" oninput="renderAnalytics()" />
         <button onclick="window.location='/api/analytics/export'">ייצוא לאקסל</button>
       </div>
       <div id="analyticsCards" class="cards"></div>
