@@ -1,0 +1,140 @@
+/* KLC v1.6.3 - התאמת יוזר עובד לסמארטפון */
+/* להדביק בסוף public/style.css */
+
+@media (max-width: 900px) {
+  body { background: #f3f6fb; }
+  .app { display: block; }
+
+  aside {
+    width: 100%;
+    height: auto;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 12px;
+    border-bottom-left-radius: 18px;
+    border-bottom-right-radius: 18px;
+  }
+
+  aside h1 { font-size: 30px; margin: 0 0 8px; }
+  .me { font-size: 14px; padding: 8px; margin-bottom: 8px; }
+
+  .nav, .logout {
+    padding: 10px 12px;
+    margin: 5px 0;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+
+  main { padding: 12px; }
+  h2 { font-size: 24px; margin: 14px 0 10px; }
+
+  .panel, .notice, .card {
+    border-radius: 16px;
+    padding: 12px;
+    margin: 10px 0;
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .card b { font-size: 24px; }
+
+  input, select, button {
+    font-size: 17px;
+    min-height: 46px;
+  }
+
+  #workerWaveSelect {
+    font-size: 18px;
+    font-weight: bold;
+    padding: 14px;
+    margin-bottom: 10px;
+  }
+
+  #workerActions .actions, .actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  #workerActions button {
+    width: 100%;
+    font-size: 18px;
+    min-height: 54px;
+  }
+
+  #workerItems table,
+  #workerItems thead,
+  #workerItems tbody,
+  #workerItems th,
+  #workerItems td,
+  #workerItems tr {
+    display: block;
+    width: 100%;
+  }
+
+  #workerItems thead { display: none; }
+
+  #workerItems table {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  #workerItems tr {
+    background: white;
+    margin: 12px 0;
+    border-radius: 18px;
+    padding: 12px;
+    box-shadow: 0 8px 22px rgba(15,23,42,.10);
+  }
+
+  #workerItems tr.picked { background: #ecfdf5; }
+  #workerItems tr.alt_mix { background: #fffbeb; }
+  #workerItems tr.not_found { background: #fef2f2; }
+
+  #workerItems td {
+    border: 0;
+    padding: 8px 4px;
+    font-size: 17px;
+  }
+
+  #workerItems td:nth-child(1)::before { content: "מיקום: "; font-weight: bold; }
+  #workerItems td:nth-child(2)::before { content: "דגם: "; font-weight: bold; }
+  #workerItems td:nth-child(3)::before { content: "מיקס / מידה: "; font-weight: bold; }
+  #workerItems td:nth-child(4)::before { content: "כמות: "; font-weight: bold; }
+  #workerItems td:nth-child(5)::before { content: "סטטוס: "; font-weight: bold; }
+
+  #workerItems td:nth-child(6) { padding-top: 12px; }
+  #workerItems td:nth-child(6)::before { content: ""; }
+
+  #workerItems td:nth-child(6) .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  #workerItems td:nth-child(6) button,
+  #workerItems td:nth-child(6) select {
+    width: 100%;
+    min-height: 50px;
+    font-size: 16px;
+  }
+
+  .grid, .filters { grid-template-columns: 1fr; }
+}
+
+body.worker-mode aside .admin-only { display: none !important; }
+
+body.worker-mode aside {
+  background: linear-gradient(135deg, #0f172a, #1d4ed8);
+}
+
+body.worker-mode main { max-width: 760px; }
+
+body.worker-mode #workerPage h2,
+body.worker-mode #personalStatusPage h2 {
+  text-align: center;
+}
