@@ -45,7 +45,52 @@ function sourceLabel(sourceType){ return {pants:"השלמת מכנסיים",dail
 function qtyValue(v){ const n=Number(String(v??"").replace(",",".")); return Number.isFinite(n)&&n>0 ? n : 1; }
 function normalizeStore(store){ return String(store||"").trim(); }
 function clean(v){ return String(v ?? "").trim(); }
-function rowVal(row, names){ for(const n of names){ if(row[n]!==undefined && row[n]!==null && String(row[n]).trim()!=="") return String(row[n]).trim(); } return ""; }
+function normHeader(v){
+  return String(v ?? "")
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u200E\u200F]/g, "")
+    .replace(/["׳״']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function rowVal(row, names){
+  const wanted = names.map(normHeader);
+  for(const key of Object.keys(row || {})){
+    const nk = normHeader(key);
+    if(wanted.includes(nk) && row[key]!==undefined && row[key]!==null && String(row[key]).trim()!==""){
+      return String(row[key]).trim();
+    }
+  }
+  return "";
+}
+function sheetRowsByHeader(wb, headerNames){
+  const wanted = headerNames.map(normHeader);
+  for(const s of wb.SheetNames){
+    const ws = wb.Sheets[s];
+    if(!ws) continue;
+    const aoa = XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
+    let headerIndex = -1;
+    let header = [];
+    for(let i=0;i<Math.min(30, aoa.length);i++){
+      const row = (aoa[i] || []).map(normHeader);
+      if(wanted.every(w => row.includes(w))){
+        headerIndex = i;
+        header = row;
+        break;
+      }
+    }
+    if(headerIndex >= 0){
+      const rows = [];
+      for(let r=headerIndex+1; r<aoa.length; r++){
+        const obj = {};
+        (aoa[r] || []).forEach((v,i)=>{ obj[header[i] || `COL_${i}`] = v; });
+        rows.push(obj);
+      }
+      return rows;
+    }
+  }
+  return [];
+}
 async function ensureColumn(table,column,type){ const cols=await all(`PRAGMA table_info(${table})`); if(!cols.some(c=>c.name===column)) await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); }
 async function nextWaveNo(store,sourceType){ const sn=storeNumber(store), code=typeCode(sourceType), key=`${sn}-${code}`; const ex=await get("SELECT counter FROM counters WHERE counter_key=?",[key]); const next=(ex?.counter||0)+1; await run("INSERT OR REPLACE INTO counters(counter_key,counter) VALUES(?,?)",[key,next]); return `${sn}-${code}-${String(next).padStart(5,"0")}`; }
 
@@ -113,11 +158,13 @@ function detectPickingFile(wb, originalName=""){
   return {sourceType:"melange",rows:normalizeMelange(wb)};
 }
 async function locationFor(model,sourceType){
+  const m = clean(model);
   if(sourceType==="daily"){
-    const r=await get("SELECT location FROM locations WHERE kind='daily' AND model_key=?",[model]); return r?.location||"";
+    const r=await get("SELECT location FROM locations WHERE kind='daily' AND model_key=?",[m]);
+    return r?.location||"";
   }
   if(sourceType==="melange"){
-    const full=String(model||""), partial=full.length>=9?full.substring(3,9):full;
+    const full=m, partial=full.length>=9?full.substring(3,9):full;
     const r1=await get("SELECT location FROM locations WHERE kind='melange' AND model_key=?",[partial]); if(r1) return r1.location;
     const r2=await get("SELECT location FROM locations WHERE kind='melange' AND model_key=?",[full]); return r2?.location||"";
   }
@@ -157,15 +204,70 @@ app.post("/api/upload/picking", requireAdmin, upload.array("files",20), async (r
   }
   res.json(total);
 });
-app.post("/api/upload/locations/:kind", requireAdmin, upload.single("file"), async (req,res)=>{ const kind=req.params.kind; if(!req.file) return res.status(400).json({error:"לא נבחר קובץ"}); const wb=readWorkbook(req.file.path); let count=0; if(kind==="daily"){ const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:"",raw:false}); for(const r of rows){ const model=rowVal(r,["קוד פריט","דגם"]), loc=rowVal(r,["תאור","מיקום"]); if(model&&loc){ await run("INSERT OR REPLACE INTO locations(kind,model_key,location,updated_at) VALUES(?,?,?,?)",["daily",model,loc,now()]); count++; } } await refreshLocationsForKind("daily"); } else if(kind==="melange"){ const rows=sheetToRows(wb,"מתעדכן קבוע"); for(const r of rows){ const model=rowVal(r,["דגם"]), loc=rowVal(r,["מיקום"]); if(model&&loc){ await run("INSERT OR REPLACE INTO locations(kind,model_key,location,updated_at) VALUES(?,?,?,?)",["melange",model,loc,now()]); count++; } } await refreshLocationsForKind("melange"); } else return res.status(400).json({error:"סוג מיקומים לא תקין"}); res.json({count}); });
+app.post("/api/upload/locations/:kind", requireAdmin, upload.single("file"), async (req,res)=>{
+  const kind=req.params.kind;
+  if(!req.file) return res.status(400).json({error:"לא נבחר קובץ"});
+  const wb=readWorkbook(req.file.path);
+  let count=0;
+
+  if(kind==="daily"){
+    // קובץ מיקומים ליקוט יומי:
+    // קוד פריט = דגם, תאור/תיאור = מיקום
+    let rows = sheetRowsByHeader(wb, ["קוד פריט","תאור"]);
+    if(!rows.length) rows = sheetRowsByHeader(wb, ["קוד פריט","תיאור"]);
+    if(!rows.length) rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:"",raw:false});
+
+    for(const r of rows){
+      const model = rowVal(r,["קוד פריט","דגם","פריט"]);
+      const loc = rowVal(r,["תאור","תיאור","מיקום","תא אחסון"]);
+      if(model && loc){
+        await run("INSERT OR REPLACE INTO locations(kind,model_key,location,updated_at) VALUES(?,?,?,?)",["daily",clean(model),clean(loc),now()]);
+        count++;
+      }
+    }
+    await refreshLocationsForKind("daily");
+  } else if(kind==="melange"){
+    let rows=sheetToRows(wb,"מתעדכן קבוע");
+    if(!rows.length) rows = sheetRowsByHeader(wb, ["דגם","מיקום"]);
+    for(const r of rows){
+      const model=rowVal(r,["דגם"]);
+      const loc=rowVal(r,["מיקום","תאור","תיאור"]);
+      if(model&&loc){
+        await run("INSERT OR REPLACE INTO locations(kind,model_key,location,updated_at) VALUES(?,?,?,?)",["melange",clean(model),clean(loc),now()]);
+        count++;
+      }
+    }
+    await refreshLocationsForKind("melange");
+  } else return res.status(400).json({error:"סוג מיקומים לא תקין"});
+  res.json({count});
+});
 
 app.get("/api/waves", requireLogin, async (req,res)=>{ const waves = normalizeRole(req.session.user.role)==="admin" ? await all("SELECT * FROM waves ORDER BY created_at DESC") : await all(`SELECT * FROM waves WHERE assigned_to=? AND status IN ('open','assigned','active') ORDER BY created_at ASC`,[req.session.user.username]); res.json(await Promise.all(waves.map(waveWithItems))); });
 app.post("/api/assign", requireAdmin, async (req,res)=>{ const waveId=req.body.waveId||req.body.wave_id, username=req.body.username; if(!waveId||!username||username==="__none__") return res.status(400).json({error:"יש לבחור גל ועובד"}); const w=await get("SELECT assigned_to FROM waves WHERE id=?",[waveId]); if(w?.assigned_to) return res.status(400).json({error:"הגל כבר משויך לעובד. יש להסיר שיוך לפני שיוך מחדש."}); await run("UPDATE waves SET assigned_to=?, status=CASE WHEN status='open' THEN 'assigned' ELSE status END WHERE id=?",[username,waveId]); res.json({ok:true}); });
 app.post("/api/wave/unassign", requireAdmin, async (req,res)=>{ const waveId=req.body.waveId||req.body.wave_id; await run("UPDATE waves SET assigned_to=NULL, status=CASE WHEN status IN ('assigned','active') THEN 'open' ELSE status END WHERE id=?",[waveId]); res.json({ok:true}); });
 app.delete("/api/waves/:id", requireAdmin, async (req,res)=>{ await run("DELETE FROM wave_items WHERE wave_id=?",[req.params.id]); await run("DELETE FROM waves WHERE id=?",[req.params.id]); res.json({ok:true}); });
 app.post("/api/item/status", requireLogin, async (req,res)=>{ const itemId=req.body.itemId||req.body.item_id, status=req.body.status, actualMix=req.body.actualMix||req.body.actual_mix||""; const item=await get(`SELECT wi.*, w.assigned_to, w.id AS wave_id FROM wave_items wi JOIN waves w ON w.id=wi.wave_id WHERE wi.id=?`,[itemId]); if(!item) return res.status(404).json({error:"פריט לא נמצא"}); if(normalizeRole(req.session.user.role)!=="admin" && item.assigned_to!==req.session.user.username) return res.status(403).json({error:"אין הרשאה לפריט הזה"}); if(status==="open") await run(`UPDATE wave_items SET status='open', actual_mix='', picked_by='', picked_at='' WHERE id=?`,[itemId]); else { await run(`UPDATE wave_items SET status=?, actual_mix=?, picked_by=?, picked_at=? WHERE id=?`,[status,actualMix||"",req.session.user.username,now(),itemId]); await run("UPDATE waves SET status='active' WHERE id=? AND status IN ('open','assigned')",[item.wave_id]); } res.json({ok:true}); });
-app.post("/api/wave/complete", requireLogin, async (req,res)=>{ const waveId=req.body.waveId||req.body.wave_id; await run("UPDATE waves SET status='completed', closed_at=?, close_reason='ליקוט הושלם' WHERE id=?",[now(),waveId]); res.json({ok:true,message:"ליקוט הושלם - סגור משטח"}); });
+app.post("/api/wave/complete", requireLogin, async (req,res)=>{
+  const waveId=req.body.waveId||req.body.wave_id;
+  const open = await get("SELECT COUNT(*) AS c FROM wave_items WHERE wave_id=? AND status='open'", [waveId]);
+  if((open?.c || 0) > 0){
+    return res.status(400).json({error:`יש עוד ${open.c} קרטונים פתוחים בגל הזה. אפשר לסגור משטח מלא, או להשלים סטטוס לכל השורות.`});
+  }
+  await run("UPDATE waves SET status='completed', closed_at=?, close_reason='ליקוט הושלם' WHERE id=?",[now(),waveId]);
+  res.json({ok:true,message:"ליקוט הושלם - סגור משטח"});
+}); });
 app.post("/api/wave/pallet-full", requireLogin, async (req,res)=>{ const waveId=req.body.waveId||req.body.wave_id; const w=await get("SELECT * FROM waves WHERE id=?",[waveId]); if(!w) return res.status(404).json({error:"גל לא נמצא"}); const openItems=await all("SELECT * FROM wave_items WHERE wave_id=? AND status='open'",[waveId]); if(!openItems.length) return res.status(400).json({error:"אין פריטים פתוחים לגל המשך"}); const newId=id(), newWaveNo=await nextWaveNo(w.store,w.source_type); await run(`INSERT INTO waves(id,wave_no,store,store_no,source_type,source_label,status,assigned_to,created_at,parent_wave_no) VALUES(?,?,?,?,?,?,?,?,?,?)`,[newId,newWaveNo,w.store,w.store_no,w.source_type,w.source_label,w.assigned_to?"assigned":"open",w.assigned_to,now(),w.wave_no]); for(const it of openItems){ await run(`INSERT INTO wave_items(id,wave_id,model,mix,qty,location,source_file,status,created_at,import_id) VALUES(?,?,?,?,?,?,?,?,?,?)`,[id(),newId,it.model,it.mix,it.qty,it.location,it.source_file,"open",now(),it.import_id]); await run("DELETE FROM wave_items WHERE id=?",[it.id]); } await run("UPDATE waves SET status='pallet_full', closed_at=?, close_reason='משטח מלא' WHERE id=?",[now(),waveId]); res.json({ok:true,newWaveNo}); });
+
+
+app.get("/api/my-performance", requireLogin, async (req,res)=>{
+  const user = req.session.user.username;
+  const rows = await all(`SELECT w.id AS wave_id, w.wave_no, w.store, w.source_label, w.status AS wave_status, w.closed_at, w.close_reason,
+    wi.id AS item_id, wi.model, wi.mix, wi.qty, wi.location, wi.status, wi.actual_mix, wi.picked_by, wi.picked_at, wi.source_file
+    FROM wave_items wi JOIN waves w ON w.id=wi.wave_id
+    WHERE w.assigned_to=? OR wi.picked_by=?
+    ORDER BY COALESCE(w.closed_at, wi.picked_at, wi.created_at) DESC`, [user,user]);
+  res.json(rows);
+});
 
 app.get("/api/imports", requireAdmin, async (req,res)=>{ const imports=await all(`SELECT id, filename, source_type, rows_count, created_at FROM imports ORDER BY created_at DESC`); const output=[]; for(const im of imports){ let stats=await get(`SELECT COUNT(*) AS total, SUM(CASE WHEN status!='open' THEN 1 ELSE 0 END) AS done, SUM(CASE WHEN status='not_found' THEN 1 ELSE 0 END) AS not_found FROM wave_items WHERE import_id=?`,[im.id]); if(!stats||stats.total===0) stats=await get(`SELECT COUNT(*) AS total, SUM(CASE WHEN wi.status!='open' THEN 1 ELSE 0 END) AS done, SUM(CASE WHEN wi.status='not_found' THEN 1 ELSE 0 END) AS not_found FROM wave_items wi JOIN waves w ON w.id=wi.wave_id WHERE wi.source_file=? AND w.source_type=?`,[im.filename,im.source_type]); const total=stats?.total||0, done=stats?.done||0; output.push({...im,source_label:sourceLabel(im.source_type),total_items:total,done_items:done,not_found_items:stats?.not_found||0,percent:total?Math.round(done/total*100):0,completed:total>0&&done===total}); } res.json(output); });
 app.delete("/api/imports/:id", requireAdmin, async (req,res)=>{ const im=await get("SELECT * FROM imports WHERE id=?",[req.params.id]); if(!im) return res.status(404).json({error:"קובץ לא נמצא"}); const byImport=await get("SELECT COUNT(*) AS c FROM wave_items WHERE import_id=?",[im.id]); if(byImport?.c>0) await run("DELETE FROM wave_items WHERE import_id=?",[im.id]); else await run(`DELETE FROM wave_items WHERE source_file=? AND wave_id IN (SELECT id FROM waves WHERE source_type=?)`,[im.filename,im.source_type]); await run("DELETE FROM imports WHERE id=?",[im.id]); await cleanupEmptyWaves(); res.json({ok:true}); });
@@ -173,4 +275,4 @@ app.delete("/api/imports/:id", requireAdmin, async (req,res)=>{ const im=await g
 app.get("/api/analytics", requireAdmin, async (req,res)=>{ res.json(await all(`SELECT w.id AS wave_id, w.wave_no, w.store, w.source_label, w.assigned_to, w.status AS wave_status, wi.model, wi.mix, wi.qty, wi.location, wi.status, wi.actual_mix, wi.picked_by, wi.picked_at, wi.source_file FROM wave_items wi JOIN waves w ON w.id=wi.wave_id ORDER BY COALESCE(wi.picked_at, wi.created_at) DESC`)); });
 app.get("/api/analytics/export", requireAdmin, async (req,res)=>{ const rows=await all(`SELECT w.wave_no AS 'גל', w.store AS 'חנות', w.source_label AS 'סוג גל', w.assigned_to AS 'עובד משויך', wi.model AS 'דגם', wi.mix AS 'מיקס נדרש', wi.qty AS 'כמות', wi.location AS 'מיקום', wi.status AS 'סטטוס', wi.actual_mix AS 'מיקס בפועל', wi.picked_by AS 'בוצע ע״י', wi.picked_at AS 'תאריך', wi.source_file AS 'קובץ מקור' FROM wave_items wi JOIN waves w ON w.id=wi.wave_id`); const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"ניתוח נתונים"); const buf=XLSX.write(wb,{type:"buffer",bookType:"xlsx"}); res.setHeader("Content-Disposition",`attachment; filename="KLC_analytics.xlsx"`); res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); res.send(buf); });
 
-initDb().then(()=>app.listen(PORT,()=>console.log(`KLC v1.5 running on port ${PORT}`)));
+initDb().then(()=>app.listen(PORT,()=>console.log(`KLC v1.6 running on port ${PORT}`)));
