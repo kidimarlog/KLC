@@ -1,0 +1,27 @@
+// KLC v1.6.2 SERVER PATCH
+// ב-server.js יש להחליף את endpoint /api/analytics כולו בקטע הזה:
+
+app.get("/api/analytics", requireAdmin, async (req,res)=>{
+  res.json(await all(`SELECT 
+    w.id AS wave_id,
+    w.wave_no,
+    w.store,
+    w.source_label,
+    w.assigned_to,
+    w.status AS wave_status,
+    w.closed_at,
+    w.close_reason,
+    wi.id AS item_id,
+    wi.model,
+    wi.mix,
+    wi.qty,
+    wi.location,
+    wi.status,
+    wi.actual_mix,
+    wi.picked_by,
+    wi.picked_at,
+    wi.source_file
+  FROM wave_items wi 
+  JOIN waves w ON w.id=wi.wave_id 
+  ORDER BY COALESCE(wi.picked_at, wi.created_at) DESC`));
+});
