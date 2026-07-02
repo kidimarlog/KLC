@@ -446,3 +446,114 @@ function renderWorkerPage(){
   );
 }
 
+function getCheckedStatusWaves(){
+  return [...document.querySelectorAll(".status-wave-check:checked")].map(x=>x.value);
+}
+
+function toggleAllStatusWaves(source){
+  document.querySelectorAll(".status-wave-check").forEach(cb=>{
+    cb.checked = source.checked;
+  });
+}
+
+async function bulkDeleteStatusWaves(){
+  const ids = getCheckedStatusWaves();
+
+  if(!ids.length){
+    alert("לא נבחרו גלים למחיקה");
+    return;
+  }
+
+  if(!confirm(`למחוק ${ids.length} גלים מסומנים? כל שורות הליקוט שלהם יימחקו.`)){
+    return;
+  }
+
+  try{
+    const res = await api("/api/waves/bulk-delete",{
+      method:"POST",
+      body:JSON.stringify({waveIds:ids})
+    });
+
+    alert(`נמחקו ${res.deleted} גלים`);
+    await refresh();
+    showPage("statusPage");
+  }catch(e){
+    alert(e.message || "לא ניתן למחוק את הגלים המסומנים");
+  }
+}
+
+// החלפת מסך סטאטוס עם תיבת סימון ליד כל גל וכפתור מחק מסומנים
+function renderStatus(){
+  const sortedWaves = typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(waves) : waves;
+  const all = sortedWaves.flatMap(w=>w.items.map(i=>({...i,wave:w})));
+  const total = all.reduce((s,i)=>s+Number(i.qty||1),0);
+  const done = all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+
+  statusCards.innerHTML = `
+    <div class="card"><b>${sortedWaves.length}</b><span>גלים</span></div>
+    <div class="card"><b>${total}</b><span>יחידות</span></div>
+    <div class="card"><b>${done}</b><span>טופלו</span></div>
+    <div class="card"><b>${total-done}</b><span>נשאר</span></div>
+  `;
+
+  const bulkBar = `
+    <div class="panel status-bulk-bar">
+      <label class="bulk-check-label">
+        <input type="checkbox" onchange="toggleAllStatusWaves(this)" />
+        סמן הכל
+      </label>
+      <button class="red" onclick="bulkDeleteStatusWaves()">מחק מסומנים</button>
+    </div>
+  `;
+
+  statusTable.innerHTML = bulkBar + table(
+    ["סימון","גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","אחוז","פעולה"],
+    sortedWaves.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      return [
+        `<input type="checkbox" class="status-wave-check" value="${esc(w.id)}" />`,
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to||""),
+        statusLabel(w.status),
+        c.total,
+        c.done,
+        progress(p),
+        `<div class="actions">${w.assigned_to?`<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`:""}<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק שורה</button></div>`
+      ];
+    })
+  );
+
+  const unassigned = (typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(sortedWaves.filter(w=>!w.assigned_to&&!["completed","pallet_full"].includes(w.status))) : sortedWaves.filter(w=>!w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  unassignedWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","סטטוס","שורות","פעולה"],
+    unassigned.map(w=>[
+      esc(w.wave_no),
+      esc(w.source_label),
+      esc(w.store),
+      statusLabel(w.status),
+      w.items.length,
+      `<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק שורה</button>`
+    ])
+  );
+
+  const active = (typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(sortedWaves.filter(w=>w.assigned_to&&!["completed","pallet_full"].includes(w.status))) : sortedWaves.filter(w=>w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  activeWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","עובד","יחידות","טופלו","אחוז","פעולה"],
+    active.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to),
+        c.total,
+        c.done,
+        progress(p),
+        `<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`
+      ];
+    })
+  );
+}
+
