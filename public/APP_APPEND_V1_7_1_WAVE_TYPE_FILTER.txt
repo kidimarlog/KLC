@@ -1,0 +1,99 @@
+// KLC v1.7.1 - תיקון הופעת סינון סוג גל במסך ניתוח נתונים
+// להדביק בסוף public/app.js
+
+function klcEnsureWaveTypeFilter(){
+  const analyticsPage = document.getElementById("analyticsPage");
+  if(!analyticsPage) return;
+
+  const filters = analyticsPage.querySelector(".filters");
+  if(!filters) return;
+
+  if(!document.getElementById("filterSourceType")){
+    const sel = document.createElement("select");
+    sel.id = "filterSourceType";
+    sel.innerHTML = `
+      <option value="all">כל סוגי הגלים</option>
+      <option value="pants">השלמת מכנסיים</option>
+      <option value="daily">ליקוט יומי</option>
+      <option value="melange">מלאנז׳</option>
+    `;
+    sel.onchange = function(){ renderAnalytics(); };
+    filters.insertBefore(sel, filters.children[1] || null);
+  }
+
+  const exportBtn = filters.querySelector("button");
+  if(exportBtn){
+    exportBtn.onclick = function(){
+      const worker = document.getElementById("filterWorker")?.value || "all";
+      const status = document.getElementById("filterStatus")?.value || "all";
+      const sourceType = document.getElementById("filterSourceType")?.value || "all";
+      const dates = document.getElementById("filterDates")?.value || "";
+      window.location = `/api/analytics/export2?worker=${encodeURIComponent(worker)}&status=${encodeURIComponent(status)}&sourceType=${encodeURIComponent(sourceType)}&dates=${encodeURIComponent(dates)}`;
+    };
+  }
+}
+
+function renderAnalytics(){
+  if(me?.role !== "admin" || !document.getElementById("filterWorker")) return;
+
+  klcEnsureWaveTypeFilter();
+
+  const oldWorker = filterWorker.value || "all";
+  filterWorker.innerHTML = `<option value="all">כל העובדים</option>` + users.map(u=>`<option>${esc(u.username)}</option>`).join("");
+  filterWorker.value = oldWorker;
+
+  const worker = filterWorker.value || "all";
+  const status = filterStatus.value || "all";
+  const sourceType = document.getElementById("filterSourceType")?.value || "all";
+  const dates = filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);
+
+  let rows = [...analytics];
+
+  if(worker !== "all") rows = rows.filter(r => r.picked_by === worker || r.assigned_to === worker);
+  if(status !== "all") rows = rows.filter(r => r.status === status);
+  if(sourceType !== "all") rows = rows.filter(r => r.source_type === sourceType);
+  if(dates.length) rows = rows.filter(r => dates.some(d => (r.picked_at || "").startsWith(d)));
+
+  analyticsCards.innerHTML = `
+    <div class="card"><b>${rows.length}</b><span>שורות</span></div>
+    <div class="card"><b>${rows.filter(r=>r.status==="picked").length}</b><span>לוקט</span></div>
+    <div class="card"><b>${rows.filter(r=>r.status==="alt_mix").length}</b><span>מיקס אחר</span></div>
+    <div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div>
+  `;
+
+  const byWorker = {};
+  rows.forEach(r=>{
+    const name = r.picked_by || r.assigned_to || "לא שויך";
+    if(!byWorker[name]) byWorker[name] = {rows:0, pickedRows:0, waves:new Set()};
+    byWorker[name].rows++;
+    if(r.status !== "open") byWorker[name].pickedRows++;
+    if(r.wave_id) byWorker[name].waves.add(r.wave_id);
+  });
+
+  workerSummaryTable.innerHTML = table(
+    ["עובד","שורות משויכות/קיימות","שורות שטופלו","גלי ליקוט"],
+    Object.entries(byWorker).map(([name,o])=>[esc(name),o.rows,o.pickedRows,o.waves.size])
+  );
+
+  analyticsTable.innerHTML = table(
+    ["גל","סוג","חנות","עובד","דגם נדרש","דגם שלוקט","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","תאריך"],
+    rows.map(r=>[
+      esc(r.wave_no),
+      esc(r.source_label),
+      esc(r.store),
+      esc(r.picked_by || r.assigned_to || ""),
+      esc(r.model),
+      esc(r.picked_model || ""),
+      esc(r.mix),
+      r.qty,
+      esc(r.location || ""),
+      statusLabel(r.status),
+      esc(r.actual_mix || ""),
+      esc(formatIL(r.picked_at) || "")
+    ]),
+    rows.map(r=>r.status)
+  );
+}
+
+setTimeout(klcEnsureWaveTypeFilter, 500);
+setTimeout(klcEnsureWaveTypeFilter, 1500);
