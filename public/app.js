@@ -764,3 +764,210 @@ function renderAssign(){
   );
 }
 
+window.klcStatusSelectedWaves = window.klcStatusSelectedWaves || new Set();
+window.klcAssignSelectedWaves = window.klcAssignSelectedWaves || new Set();
+
+function rememberStatusCheck(cb){
+  if(cb.checked) window.klcStatusSelectedWaves.add(cb.value);
+  else window.klcStatusSelectedWaves.delete(cb.value);
+}
+
+function getCheckedStatusWaves(){
+  return [...window.klcStatusSelectedWaves];
+}
+
+function toggleAllStatusWaves(source){
+  document.querySelectorAll(".status-wave-check").forEach(cb=>{
+    cb.checked = source.checked;
+    rememberStatusCheck(cb);
+  });
+}
+
+async function bulkDeleteStatusWaves(){
+  const ids = getCheckedStatusWaves();
+
+  if(!ids.length){
+    alert("לא נבחרו גלים למחיקה");
+    return;
+  }
+
+  if(!confirm(`למחוק ${ids.length} גלים מסומנים? כל שורות הליקוט שלהם יימחקו.`)){
+    return;
+  }
+
+  try{
+    const res = await api("/api/waves/bulk-delete",{
+      method:"POST",
+      body:JSON.stringify({waveIds:ids})
+    });
+
+    ids.forEach(id=>window.klcStatusSelectedWaves.delete(id));
+
+    alert(`נמחקו ${res.deleted} גלים`);
+    await refresh();
+    showPage("statusPage");
+  }catch(e){
+    alert(e.message || "לא ניתן למחוק את הגלים המסומנים");
+  }
+}
+
+function renderStatus(){
+  const sortedWaves = typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(waves) : waves;
+  const all = sortedWaves.flatMap(w=>w.items.map(i=>({...i,wave:w})));
+  const total = all.reduce((s,i)=>s+Number(i.qty||1),0);
+  const done = all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+
+  statusCards.innerHTML = `
+    <div class="card"><b>${sortedWaves.length}</b><span>גלים</span></div>
+    <div class="card"><b>${total}</b><span>יחידות</span></div>
+    <div class="card"><b>${done}</b><span>טופלו</span></div>
+    <div class="card"><b>${total-done}</b><span>נשאר</span></div>
+  `;
+
+  const bulkBar = `
+    <div class="panel status-bulk-bar">
+      <label class="bulk-check-label">
+        <input type="checkbox" onchange="toggleAllStatusWaves(this)" />
+        סמן הכל
+      </label>
+      <button class="red" onclick="bulkDeleteStatusWaves()">מחק מסומנים</button>
+      <span class="small">הסימונים נשמרים גם אם המסך מתרענן.</span>
+    </div>
+  `;
+
+  statusTable.innerHTML = bulkBar + table(
+    ["סימון","גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","אחוז","פעולה"],
+    sortedWaves.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      const checked = window.klcStatusSelectedWaves.has(w.id) ? "checked" : "";
+      return [
+        `<input type="checkbox" class="status-wave-check" value="${esc(w.id)}" ${checked} onchange="rememberStatusCheck(this)" />`,
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to||""),
+        statusLabel(w.status),
+        c.total,
+        c.done,
+        progress(p),
+        `<div class="actions">${w.assigned_to?`<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`:""}<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק שורה</button></div>`
+      ];
+    })
+  );
+
+  const unassigned = (typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(sortedWaves.filter(w=>!w.assigned_to&&!["completed","pallet_full"].includes(w.status))) : sortedWaves.filter(w=>!w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  unassignedWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","סטטוס","שורות","פעולה"],
+    unassigned.map(w=>[
+      esc(w.wave_no),
+      esc(w.source_label),
+      esc(w.store),
+      statusLabel(w.status),
+      w.items.length,
+      `<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק שורה</button>`
+    ])
+  );
+
+  const active = (typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(sortedWaves.filter(w=>w.assigned_to&&!["completed","pallet_full"].includes(w.status))) : sortedWaves.filter(w=>w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  activeWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","עובד","יחידות","טופלו","אחוז","פעולה"],
+    active.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to),
+        c.total,
+        c.done,
+        progress(p),
+        `<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`
+      ];
+    })
+  );
+}
+
+function rememberAssignCheck(cb){
+  if(cb.checked) window.klcAssignSelectedWaves.add(cb.value);
+  else window.klcAssignSelectedWaves.delete(cb.value);
+}
+
+function getCheckedAssignWaves(){
+  return [...window.klcAssignSelectedWaves];
+}
+
+function toggleAllAssignWaves(source){
+  document.querySelectorAll(".assign-wave-check").forEach(cb=>{
+    cb.checked = source.checked;
+    rememberAssignCheck(cb);
+  });
+}
+
+async function bulkAssignSelectedWaves(){
+  const username = document.getElementById("assignTopWorker")?.value || "";
+  const ids = getCheckedAssignWaves();
+
+  if(!username || username === "__none__"){
+    alert("יש לבחור עובד");
+    return;
+  }
+
+  if(!ids.length){
+    alert("לא נבחרו גלים לשיוך");
+    return;
+  }
+
+  try{
+    const res = await api("/api/assign/bulk",{
+      method:"POST",
+      body:JSON.stringify({username, waveIds:ids})
+    });
+
+    ids.forEach(id=>window.klcAssignSelectedWaves.delete(id));
+
+    alert(`שויכו ${res.assigned} גלים לעובד ${username}${res.skipped ? `, דולגו ${res.skipped}` : ""}`);
+    await refresh();
+    showPage("assignPage");
+  }catch(e){
+    alert(e.message || "לא ניתן לשייך את הגלים המסומנים");
+  }
+}
+
+function renderAssign(){
+  const openWaves = (typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(waves) : waves)
+    .filter(w=>!["completed","pallet_full"].includes(w.status)&&!w.assigned_to);
+
+  const activeWorkers = users.filter(u=>isWorker(u)&&isActive(u));
+
+  const topBar = `
+    <div class="panel assign-bulk-bar">
+      <select id="assignTopWorker">
+        ${activeWorkers.map(u=>`<option value="${esc(u.username)}">${esc(u.username)}</option>`).join("") || `<option value="__none__">אין עובדים פעילים</option>`}
+      </select>
+      <button onclick="bulkAssignSelectedWaves()">שייך</button>
+      <label class="bulk-check-label">
+        <input type="checkbox" onchange="toggleAllAssignWaves(this)" />
+        סמן הכל
+      </label>
+      <span class="small">בחר עובד, סמן גלים ולחץ שייך.</span>
+    </div>
+  `;
+
+  assignTable.innerHTML = topBar + table(
+    ["סימון","גל","סוג","חנות","סטטוס","עובד","שורות","שיוך בודד"],
+    openWaves.map(w=>{
+      const checked = window.klcAssignSelectedWaves.has(w.id) ? "checked" : "";
+      return [
+        `<input type="checkbox" class="assign-wave-check" value="${esc(w.id)}" ${checked} onchange="rememberAssignCheck(this)" />`,
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        statusLabel(w.status),
+        esc(w.assigned_to||"לא שויך"),
+        w.items.length,
+        `<div class="actions">${workerDropdown(w.id)}<button onclick="assignWaveFromRow('${w.id}')">שייך</button></div>`
+      ];
+    })
+  );
+}
+
