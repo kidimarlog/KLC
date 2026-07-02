@@ -310,3 +310,17 @@ app.post("/api/item/status2", requireLogin, async (req,res)=>{
 
   res.json({ok:true});
 });
+app.post("/api/waves/bulk-delete", requireAdmin, async (req,res)=>{
+  const ids = Array.isArray(req.body.waveIds) ? req.body.waveIds.filter(Boolean) : [];
+
+  if(!ids.length){
+    return res.status(400).json({error:"לא נבחרו גלים למחיקה"});
+  }
+
+  for(const waveId of ids){
+    await run("DELETE FROM wave_items WHERE wave_id=?", [waveId]);
+    await run("DELETE FROM waves WHERE id=?", [waveId]);
+  }
+
+  res.json({ok:true, deleted:ids.length});
+});
