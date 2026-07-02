@@ -276,3 +276,37 @@ app.get("/api/analytics", requireAdmin, async (req,res)=>{ res.json(await all(`S
 app.get("/api/analytics/export", requireAdmin, async (req,res)=>{ const rows=await all(`SELECT w.wave_no AS 'גל', w.store AS 'חנות', w.source_label AS 'סוג גל', w.assigned_to AS 'עובד משויך', wi.model AS 'דגם', wi.mix AS 'מיקס נדרש', wi.qty AS 'כמות', wi.location AS 'מיקום', wi.status AS 'סטטוס', wi.actual_mix AS 'מיקס בפועל', wi.picked_by AS 'בוצע ע״י', wi.picked_at AS 'תאריך', wi.source_file AS 'קובץ מקור' FROM wave_items wi JOIN waves w ON w.id=wi.wave_id`); const ws=XLSX.utils.json_to_sheet(rows), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"ניתוח נתונים"); const buf=XLSX.write(wb,{type:"buffer",bookType:"xlsx"}); res.setHeader("Content-Disposition",`attachment; filename="KLC_analytics.xlsx"`); res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); res.send(buf); });
 
 initDb().then(()=>app.listen(PORT,()=>console.log(`KLC v1.6.1 running on port ${PORT}`)));
+
+db.run("ALTER TABLE wave_items ADD COLUMN picked_model TEXT", () => {});
+
+app.post("/api/item/status2", requireLogin, async (req,res)=>{
+  const itemId=req.body.itemId||req.body.item_id;
+  const status=req.body.status;
+  const actualMix=req.body.actualMix||req.body.actual_mix||"";
+  const pickedModel=String(req.body.pickedModel||req.body.picked_model||"").trim();
+
+  const item=await get(`SELECT wi.*, w.assigned_to, w.id AS wave_id 
+    FROM wave_items wi 
+    JOIN waves w ON w.id=wi.wave_id 
+    WHERE wi.id=?`,[itemId]);
+
+  if(!item) return res.status(404).json({error:"פריט לא נמצא"});
+
+  if(normalizeRole(req.session.user.role)!=="admin" && item.assigned_to!==req.session.user.username) {
+    return res.status(403).json({error:"אין הרשאה לפריט הזה"});
+  }
+
+  if(status==="open"){
+    await run(`UPDATE wave_items 
+      SET status='open', actual_mix='', picked_by='', picked_at='', picked_model=''
+      WHERE id=?`,[itemId]);
+  } else {
+    await run(`UPDATE wave_items 
+      SET status=?, actual_mix=?, picked_model=?, picked_by=?, picked_at=?
+      WHERE id=?`,[status,actualMix||"",pickedModel||"",req.session.user.username,now(),itemId]);
+
+    await run("UPDATE waves SET status='active' WHERE id=? AND status IN ('open','assigned')",[item.wave_id]);
+  }
+
+  res.json({ok:true});
+});
