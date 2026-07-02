@@ -1,0 +1,114 @@
+// KLC v1.7 SERVER PATCH
+// להדביק בסוף server.js
+
+// עמודה חדשה: דגם שלוקט בפועל עבור השלמת מכנסיים
+db.run("ALTER TABLE wave_items ADD COLUMN picked_model TEXT", () => {});
+
+// שמירת סטטוס + דגם שלוקט
+app.post("/api/item/status2", requireLogin, async (req,res)=>{
+  const itemId=req.body.itemId||req.body.item_id;
+  const status=req.body.status;
+  const actualMix=req.body.actualMix||req.body.actual_mix||"";
+  const pickedModel=String(req.body.pickedModel||req.body.picked_model||"").trim();
+
+  const item=await get(`SELECT wi.*, w.assigned_to, w.id AS wave_id 
+    FROM wave_items wi 
+    JOIN waves w ON w.id=wi.wave_id 
+    WHERE wi.id=?`,[itemId]);
+
+  if(!item) return res.status(404).json({error:"פריט לא נמצא"});
+
+  if(normalizeRole(req.session.user.role)!=="admin" && item.assigned_to!==req.session.user.username) {
+    return res.status(403).json({error:"אין הרשאה לפריט הזה"});
+  }
+
+  if(status==="open"){
+    await run(`UPDATE wave_items 
+      SET status='open', actual_mix='', picked_by='', picked_at='', picked_model=''
+      WHERE id=?`,[itemId]);
+  } else {
+    await run(`UPDATE wave_items 
+      SET status=?, actual_mix=?, picked_model=?, picked_by=?, picked_at=?
+      WHERE id=?`,[status,actualMix||"",pickedModel||"",req.session.user.username,now(),itemId]);
+
+    await run("UPDATE waves SET status='active' WHERE id=? AND status IN ('open','assigned')",[item.wave_id]);
+  }
+
+  res.json({ok:true});
+});
+
+// ניתוח נתונים עם דגם שלוקט + פרטי גל
+app.get("/api/analytics2", requireAdmin, async (req,res)=>{
+  res.json(await all(`SELECT 
+    w.id AS wave_id,
+    w.wave_no,
+    w.store,
+    w.source_type,
+    w.source_label,
+    w.assigned_to,
+    w.status AS wave_status,
+    w.closed_at,
+    w.close_reason,
+    wi.id AS item_id,
+    wi.model,
+    wi.mix,
+    wi.qty,
+    wi.location,
+    wi.status,
+    wi.actual_mix,
+    wi.picked_model,
+    wi.picked_by,
+    wi.picked_at,
+    wi.source_file
+  FROM wave_items wi 
+  JOIN waves w ON w.id=wi.wave_id 
+  ORDER BY COALESCE(wi.picked_at, wi.created_at) DESC`));
+});
+
+// ייצוא אקסל עם סינונים: עובד / סטטוס / סוג גל / תאריכים
+app.get("/api/analytics/export2", requireAdmin, async (req,res)=>{
+  const worker = String(req.query.worker || "all");
+  const status = String(req.query.status || "all");
+  const sourceType = String(req.query.sourceType || "all");
+  const dates = String(req.query.dates || "").split(",").map(x=>x.trim()).filter(Boolean);
+
+  let rows = await all(`SELECT 
+    w.wave_no AS 'גל',
+    w.store AS 'חנות',
+    w.source_label AS 'סוג גל',
+    w.source_type AS source_type_internal,
+    w.assigned_to AS 'עובד משויך',
+    wi.model AS 'דגם נדרש',
+    wi.picked_model AS 'דגם שלוקט',
+    wi.mix AS 'מיקס נדרש',
+    wi.qty AS 'כמות',
+    wi.location AS 'מיקום',
+    wi.status AS status_internal,
+    wi.actual_mix AS 'מיקס בפועל',
+    wi.picked_by AS 'בוצע ע״י',
+    wi.picked_at AS 'תאריך',
+    wi.source_file AS 'קובץ מקור'
+  FROM wave_items wi 
+  JOIN waves w ON w.id=wi.wave_id`);
+
+  rows = rows.filter(r=>{
+    if(worker !== "all" && r["בוצע ע״י"] !== worker && r["עובד משויך"] !== worker) return false;
+    if(status !== "all" && r.status_internal !== status) return false;
+    if(sourceType !== "all" && r.source_type_internal !== sourceType) return false;
+    if(dates.length && !dates.some(d => String(r["תאריך"]||"").startsWith(d))) return false;
+    return true;
+  }).map(r=>{
+    const out = {...r};
+    delete out.status_internal;
+    delete out.source_type_internal;
+    return out;
+  });
+
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"ניתוח נתונים");
+  const buf=XLSX.write(wb,{type:"buffer",bookType:"xlsx"});
+  res.setHeader("Content-Disposition",`attachment; filename="KLC_analytics.xlsx"`);
+  res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.send(buf);
+});

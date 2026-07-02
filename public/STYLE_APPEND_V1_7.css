@@ -1,0 +1,61 @@
+/* KLC v1.7 - השלמת מכנסיים + דגם שלוקט */
+.pants-model-box {
+  margin-top: 12px;
+  padding: 10px;
+  background: #eef6ff;
+  border-radius: 14px;
+  border: 1px solid #bfdbfe;
+}
+
+.pants-model-box label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+
+.picked-model-input {
+  font-size: 22px !important;
+  font-weight: bold;
+  text-align: center;
+  min-height: 54px !important;
+  border: 2px solid #2563eb !important;
+  background: white !important;
+}
+
+.pants-actions {
+  grid-template-columns: 1fr !important;
+}
+
+.pants-actions button {
+  min-height: 52px;
+  font-size: 17px;
+}
+
+@media (max-width: 900px) {
+  .pants-model-box {
+    margin-top: 14px;
+    padding: 12px;
+  }
+
+  .pants-model-box label {
+    font-size: 18px;
+  }
+
+  .picked-model-input {
+    font-size: 26px !important;
+    min-height: 60px !important;
+  }
+
+  .pants-actions {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .pants-actions button {
+    width: 100%;
+    min-height: 58px;
+    font-size: 19px;
+  }
+}

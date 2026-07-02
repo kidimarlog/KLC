@@ -1,0 +1,203 @@
+// KLC v1.7 APP PATCH
+// להדביק בסוף public/app.js
+
+function isPantsWave(w){
+  return String(w.source_type||"").toLowerCase()==="pants" || String(w.source_label||"").includes("מכנס");
+}
+
+async function setItemStatus(itemId,status,actualMix="",pickedModel=""){
+  await api("/api/item/status2",{
+    method:"POST",
+    body:JSON.stringify({itemId,status,actualMix,pickedModel})
+  });
+  await refresh();
+}
+
+function pantsPickedModelInput(i){
+  const val = esc(i.picked_model || "");
+  return `
+    <div class="pants-model-box">
+      <label for="picked_model_${i.id}">הזן דגם שלוקט</label>
+      <input
+        id="picked_model_${i.id}"
+        type="number"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        value="${val}"
+        placeholder="מספר דגם"
+        class="picked-model-input"
+      />
+    </div>
+  `;
+}
+
+function pantsActions(i){
+  return `
+    <div class="actions pants-actions">
+      <button class="green" onclick="setItemStatus('${i.id}','picked','',document.getElementById('picked_model_${i.id}').value)">לוקט</button>
+      <button class="red" onclick="setItemStatus('${i.id}','not_found','',document.getElementById('picked_model_${i.id}').value)">אין מלאי</button>
+      <button class="gray" onclick="setItemStatus('${i.id}','open')">בטל סימון</button>
+    </div>
+  `;
+}
+
+function normalActions(i){
+  return `
+    <div class="actions">
+      <button class="green" onclick="setItemStatus('${i.id}','picked')">לוקט</button>
+      <select id="mix_${i.id}" style="width:80px">${MIXES.map(m=>`<option>${m}</option>`).join("")}</select>
+      <button class="orange" onclick="setItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button>
+      <button class="red" onclick="setItemStatus('${i.id}','not_found')">לא נמצא</button>
+      <button class="gray" onclick="setItemStatus('${i.id}','open')">בטל סימון</button>
+    </div>
+  `;
+}
+
+// החלפת מסך הליקוט לעובד: אם סוג גל הוא השלמת מכנסיים, מוצגים 3 לחצנים + דגם שלוקט
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect"))return;
+
+  const selectedId=workerWaveSelect.value;
+  workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
+
+  const w=waves.find(x=>x.id===selectedId)||waves[0];
+
+  if(!w){
+    workerCards.innerHTML="";
+    workerActions.innerHTML="";
+    workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;
+    nextWave.innerHTML="";
+    return;
+  }
+
+  workerWaveSelect.value=w.id;
+
+  const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];
+  nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:"אין גל הבא כרגע";
+
+  const c=counts(w);
+  workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+
+  workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+
+  const sortedItems = typeof sortItemsByLocation === "function" ? sortItemsByLocation(w.items) : (w.items || []);
+  const pants = isPantsWave(w);
+
+  workerItems.innerHTML=table(
+    ["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location||"ללא מיקום"),
+      pants ? `${esc(i.model)}${pantsPickedModelInput(i)}` : esc(i.model),
+      esc(i.mix||"A"),
+      esc(i.qty||1),
+      `${statusLabel(i.status)}<br><span class="small">${esc(formatIL(i.picked_at)||"")}</span>${i.picked_model?`<br><span class="small">דגם שלוקט: ${esc(i.picked_model)}</span>`:""}`,
+      pants ? pantsActions(i) : normalActions(i)
+    ]),
+    sortedItems.map(i=>i.status)
+  );
+}
+
+// טעינת ניתוח נתונים החדש
+async function refresh(){
+  waves=await api("/api/waves");
+  if(me.role==="admin"){
+    users=await api("/api/users");
+    analytics=await api("/api/analytics2");
+    renderUsers();
+    renderAssign();
+    renderStatus();
+    renderAnalytics();
+    renderDashboard();
+  }else{
+    renderWorkerPage();
+  }
+}
+
+function ensureSourceTypeFilter(){
+  if(!document.getElementById("filterSourceType")){
+    const select = document.createElement("select");
+    select.id = "filterSourceType";
+    select.onchange = renderAnalytics;
+    select.innerHTML = `
+      <option value="all">כל סוגי הגלים</option>
+      <option value="pants">השלמת מכנסיים</option>
+      <option value="daily">ליקוט יומי</option>
+      <option value="melange">מלאנז׳</option>
+    `;
+    const panel = document.querySelector("#analyticsPage .filters");
+    if(panel) panel.insertBefore(select, panel.children[1] || null);
+  }
+}
+
+function exportAnalyticsFiltered(){
+  const worker = (document.getElementById("filterWorker")?.value || "all");
+  const status = (document.getElementById("filterStatus")?.value || "all");
+  const sourceType = (document.getElementById("filterSourceType")?.value || "all");
+  const dates = (document.getElementById("filterDates")?.value || "");
+  window.location = `/api/analytics/export2?worker=${encodeURIComponent(worker)}&status=${encodeURIComponent(status)}&sourceType=${encodeURIComponent(sourceType)}&dates=${encodeURIComponent(dates)}`;
+}
+
+// החלפת מסך ניתוח נתונים: כולל סינון סוג גל + דגם שלוקט
+function renderAnalytics(){
+  if(me?.role!=="admin"||!document.getElementById("filterWorker"))return;
+
+  ensureSourceTypeFilter();
+
+  const old=filterWorker.value||"all";
+  filterWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join("");
+  filterWorker.value=old;
+
+  const sourceType = document.getElementById("filterSourceType")?.value || "all";
+
+  let rows=[...analytics];
+  const worker=filterWorker.value||"all";
+  const st=filterStatus.value||"all";
+  const dates=filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);
+
+  if(worker!=="all")rows=rows.filter(r=>r.picked_by===worker||r.assigned_to===worker);
+  if(st!=="all")rows=rows.filter(r=>r.status===st);
+  if(sourceType!=="all")rows=rows.filter(r=>r.source_type===sourceType);
+  if(dates.length)rows=rows.filter(r=>dates.some(d=>(r.picked_at||"").startsWith(d)));
+
+  const exportBtn = document.querySelector("#analyticsPage .filters button");
+  if(exportBtn){
+    exportBtn.onclick = exportAnalyticsFiltered;
+  }
+
+  analyticsCards.innerHTML=`<div class="card"><b>${rows.length}</b><span>שורות</span></div><div class="card"><b>${rows.filter(r=>r.status==="picked").length}</b><span>לוקט</span></div><div class="card"><b>${rows.filter(r=>r.status==="alt_mix").length}</b><span>מיקס אחר</span></div><div class="card"><b>${rows.filter(r=>r.status==="not_found").length}</b><span>לא נמצא</span></div>`;
+
+  const byWorker={};
+  analytics.forEach(r=>{
+    const name=r.picked_by||r.assigned_to||"לא שויך";
+    if(worker!=="all"&&name!==worker)return;
+    if(sourceType!=="all"&&r.source_type!==sourceType)return;
+    if(!byWorker[name])byWorker[name]={rows:0,pickedRows:0,waves:new Set()};
+    byWorker[name].rows++;
+    if(r.status!=="open")byWorker[name].pickedRows++;
+    if(r.wave_id)byWorker[name].waves.add(r.wave_id);
+  });
+
+  workerSummaryTable.innerHTML=table(
+    ["עובד","שורות משויכות/קיימות","שורות שטופלו","גלי ליקוט"],
+    Object.entries(byWorker).map(([name,o])=>[esc(name),o.rows,o.pickedRows,o.waves.size])
+  );
+
+  analyticsTable.innerHTML=table(
+    ["גל","סוג","חנות","עובד","דגם נדרש","דגם שלוקט","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","תאריך"],
+    rows.map(r=>[
+      esc(r.wave_no),
+      esc(r.source_label),
+      esc(r.store),
+      esc(r.picked_by||r.assigned_to||""),
+      esc(r.model),
+      esc(r.picked_model||""),
+      esc(r.mix),
+      r.qty,
+      esc(r.location||""),
+      statusLabel(r.status),
+      esc(r.actual_mix||""),
+      esc(formatIL(r.picked_at)||"")
+    ]),
+    rows.map(r=>r.status)
+  );
+}
