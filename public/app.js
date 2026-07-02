@@ -204,4 +204,138 @@ async function saveCorrection(itemId){
   analytics=await api("/api/analytics");
   renderCorrections();
 }
+// KLC v1.7.2 - תיקון כפוי למסך עובד בגל "השלמת מכנסיים"
+// חשוב: להדביק בסוף public/app.js, אחרי כל העדכונים הקודמים.
+
+function klcIsPantsWave(w){
+  const label = String(w?.source_label || "");
+  const type = String(w?.source_type || "").toLowerCase();
+  const no = String(w?.wave_no || "");
+  return type === "pants" || label.includes("מכנס") || no.includes("-P-");
+}
+
+async function klcSetItemStatus(itemId,status,actualMix="",pickedModel=""){
+  // משתמש ב-endpoint החדש ששומר גם דגם שלוקט
+  try{
+    await api("/api/item/status2",{
+      method:"POST",
+      body:JSON.stringify({itemId,status,actualMix,pickedModel})
+    });
+  }catch(e){
+    alert(e.message || "לא ניתן לשמור את השורה. ודא שהדבקת גם את עדכון server.js");
+    return;
+  }
+  await refresh();
+}
+
+function klcPantsModelInput(i){
+  return `
+    <div class="pants-model-box">
+      <label for="picked_model_${i.id}">הזן דגם שלוקט</label>
+      <input
+        id="picked_model_${i.id}"
+        type="number"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        value="${esc(i.picked_model || "")}"
+        placeholder="מספר דגם"
+        class="picked-model-input"
+      />
+    </div>
+  `;
+}
+
+function klcPantsActions(i){
+  return `
+    <div class="actions pants-actions">
+      <button class="green" onclick="klcSetItemStatus('${i.id}','picked','',document.getElementById('picked_model_${i.id}').value)">לוקט</button>
+      <button class="red" onclick="klcSetItemStatus('${i.id}','not_found','',document.getElementById('picked_model_${i.id}').value)">אין מלאי</button>
+      <button class="gray" onclick="klcSetItemStatus('${i.id}','open')">בטל סימון</button>
+    </div>
+  `;
+}
+
+function klcRegularActions(i){
+  return `
+    <div class="actions">
+      <button class="green" onclick="klcSetItemStatus('${i.id}','picked')">לוקט</button>
+      <select id="mix_${i.id}" style="width:80px">${MIXES.map(m=>`<option>${m}</option>`).join("")}</select>
+      <button class="orange" onclick="klcSetItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button>
+      <button class="red" onclick="klcSetItemStatus('${i.id}','not_found')">לא נמצא</button>
+      <button class="gray" onclick="klcSetItemStatus('${i.id}','open')">בטל סימון</button>
+    </div>
+  `;
+}
+
+// זה מחליף סופית את renderWorkerPage, גם אם עדכון קודם דרס אותו.
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect")) return;
+
+  const selectedId = workerWaveSelect.value;
+
+  workerWaveSelect.innerHTML = waves.map(w =>
+    `<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`
+  ).join("") || "<option value='__none__'>אין גלי ליקוט</option>";
+
+  const w = waves.find(x=>x.id===selectedId) || waves[0];
+
+  if(!w){
+    workerCards.innerHTML = "";
+    workerActions.innerHTML = "";
+    workerItems.innerHTML = `<div class="panel">אין גלים משויכים כרגע.</div>`;
+    nextWave.innerHTML = "";
+    return;
+  }
+
+  workerWaveSelect.value = w.id;
+
+  const idx = waves.findIndex(x=>x.id===w.id);
+  const next = waves[idx+1];
+  nextWave.innerHTML = next
+    ? `הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`
+    : "אין גל הבא כרגע";
+
+  const c = counts(w);
+  workerCards.innerHTML = `
+    <div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div>
+    <div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div>
+    <div class="card"><b>${esc(w.store)}</b><span>חנות</span></div>
+    <div class="card"><b>${c.total}</b><span>יחידות</span></div>
+    <div class="card"><b>${c.done}</b><span>טופלו</span></div>
+    <div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>
+  `;
+
+  workerActions.innerHTML = `
+    <div class="panel actions">
+      <button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button>
+      <button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button>
+    </div>
+  `;
+
+  const sortedItems = typeof sortItemsByLocation === "function"
+    ? sortItemsByLocation(w.items)
+    : (w.items || []);
+
+  const isPants = klcIsPantsWave(w);
+
+  workerItems.innerHTML = table(
+    ["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location || "ללא מיקום"),
+      isPants
+        ? `${esc(i.model)}${klcPantsModelInput(i)}`
+        : esc(i.model),
+      esc(i.mix || "A"),
+      esc(i.qty || 1),
+      `${statusLabel(i.status)}<br><span class="small">${esc(formatIL(i.picked_at)||"")}</span>${i.picked_model?`<br><span class="small">דגם שלוקט: ${esc(i.picked_model)}</span>`:""}`,
+      isPants ? klcPantsActions(i) : klcRegularActions(i)
+    ]),
+    sortedItems.map(i=>i.status)
+  );
+}
+
+// אחרי טעינה מחדש של הדף, נוודא שמסך העובד מצויר עם הגרסה החדשה
+setTimeout(()=>{ 
+  if(me?.role === "worker") renderWorkerPage(); 
+}, 800);
 
