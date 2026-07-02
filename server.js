@@ -324,3 +324,38 @@ app.post("/api/waves/bulk-delete", requireAdmin, async (req,res)=>{
 
   res.json({ok:true, deleted:ids.length});
 });
+
+app.post("/api/assign/bulk", requireAdmin, async (req,res)=>{
+  const waveIds = Array.isArray(req.body.waveIds) ? req.body.waveIds.filter(Boolean) : [];
+  const username = String(req.body.username || "").trim();
+
+  if(!username){
+    return res.status(400).json({error:"יש לבחור עובד"});
+  }
+
+  if(!waveIds.length){
+    return res.status(400).json({error:"לא נבחרו גלים לשיוך"});
+  }
+
+  let assigned = 0;
+  let skipped = 0;
+
+  for(const waveId of waveIds){
+    const w = await get("SELECT assigned_to FROM waves WHERE id=?", [waveId]);
+
+    if(!w){
+      skipped++;
+      continue;
+    }
+
+    if(w.assigned_to){
+      skipped++;
+      continue;
+    }
+
+    await run("UPDATE waves SET assigned_to=?, status=CASE WHEN status='open' THEN 'assigned' ELSE status END WHERE id=?", [username, waveId]);
+    assigned++;
+  }
+
+  res.json({ok:true, assigned, skipped});
+});
