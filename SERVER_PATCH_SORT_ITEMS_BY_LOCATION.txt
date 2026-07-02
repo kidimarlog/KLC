@@ -1,0 +1,26 @@
+// KLC v1.6.4 SERVER PATCH
+// ב-server.js להדביק את הפונקציות האלה לפני:
+// async function waveWithItems(w)
+
+function naturalLocationParts(v){
+  const s = String(v || "").trim().toUpperCase();
+  const m = s.match(/^([A-Z]+)\s*[-_ ]?\s*(\d+)/);
+  if(!m) return {letter:"ZZZ", num:999999, raw:s};
+  return {letter:m[1], num:Number(m[2]), raw:s};
+}
+
+function compareLocations(a,b){
+  const x = naturalLocationParts(a.location);
+  const y = naturalLocationParts(b.location);
+  if(x.letter !== y.letter) return x.letter.localeCompare(y.letter);
+  if(x.num !== y.num) return x.num - y.num;
+  return x.raw.localeCompare(y.raw);
+}
+
+// ואז להחליף את הפונקציה waveWithItems הקיימת בזה:
+
+async function waveWithItems(w){
+  const items = await all("SELECT * FROM wave_items WHERE wave_id=?", [w.id]);
+  items.sort(compareLocations);
+  return {...w, items};
+}

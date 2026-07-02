@@ -1,0 +1,150 @@
+// KLC v1.6.4 APP PATCH
+// להדביק בסוף public/app.js
+
+function storeSortNumber(store){
+  const m = String(store || "").match(/\d+/);
+  return m ? Number(m[0]) : 999999999;
+}
+
+function sortWavesByStoreAsc(list){
+  return [...list].sort((a,b)=>{
+    const na = storeSortNumber(a.store);
+    const nb = storeSortNumber(b.store);
+    if(na !== nb) return na - nb;
+    return String(a.store || "").localeCompare(String(b.store || ""), "he");
+  });
+}
+
+function locationSortParts(loc){
+  const s = String(loc || "").trim().toUpperCase();
+  const m = s.match(/^([A-Z]+)\s*[-_ ]?\s*(\d+)/);
+  if(!m) return {letter:"ZZZ", num:999999, raw:s};
+  return {letter:m[1], num:Number(m[2]), raw:s};
+}
+
+function sortItemsByLocation(items){
+  return [...(items || [])].sort((a,b)=>{
+    const x = locationSortParts(a.location);
+    const y = locationSortParts(b.location);
+    if(x.letter !== y.letter) return x.letter.localeCompare(y.letter);
+    if(x.num !== y.num) return x.num - y.num;
+    return x.raw.localeCompare(y.raw);
+  });
+}
+
+function renderAssign(){
+  const openWaves = sortWavesByStoreAsc(
+    waves.filter(w=>!["completed","pallet_full"].includes(w.status)&&!w.assigned_to)
+  );
+
+  assignTable.innerHTML=table(
+    ["גל","סוג","חנות","סטטוס","עובד","שורות","שיוך"],
+    openWaves.map(w=>[
+      esc(w.wave_no),
+      esc(w.source_label),
+      esc(w.store),
+      statusLabel(w.status),
+      esc(w.assigned_to||"לא שויך"),
+      w.items.length,
+      `<div class="actions">${workerDropdown(w.id)}<button onclick="assignWaveFromRow('${w.id}')">שייך</button></div>`
+    ])
+  );
+}
+
+function renderStatus(){
+  const sortedWaves = sortWavesByStoreAsc(waves);
+  const all=sortedWaves.flatMap(w=>w.items.map(i=>({...i,wave:w}))),total=all.reduce((s,i)=>s+Number(i.qty||1),0),done=all.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+
+  statusCards.innerHTML=`<div class="card"><b>${sortedWaves.length}</b><span>גלים</span></div><div class="card"><b>${total}</b><span>יחידות</span></div><div class="card"><b>${done}</b><span>טופלו</span></div><div class="card"><b>${total-done}</b><span>נשאר</span></div>`;
+
+  statusTable.innerHTML=table(
+    ["גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","אחוז","פעולה"],
+    sortedWaves.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to||""),
+        statusLabel(w.status),
+        c.total,
+        c.done,
+        progress(p),
+        `<div class="actions">${w.assigned_to?`<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`:""}<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק גל</button></div>`
+      ];
+    })
+  );
+
+  const unassigned=sortWavesByStoreAsc(sortedWaves.filter(w=>!w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  unassignedWavesTable.innerHTML=table(
+    ["גל","סוג","חנות","סטטוס","שורות","פעולה"],
+    unassigned.map(w=>[
+      esc(w.wave_no),
+      esc(w.source_label),
+      esc(w.store),
+      statusLabel(w.status),
+      w.items.length,
+      `<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק גל</button>`
+    ])
+  );
+
+  const active=sortWavesByStoreAsc(sortedWaves.filter(w=>w.assigned_to&&!["completed","pallet_full"].includes(w.status)));
+  activeWavesTable.innerHTML=table(
+    ["גל","סוג","חנות","עובד","יחידות","טופלו","אחוז","פעולה"],
+    active.map(w=>{
+      const c=counts(w),p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to),
+        c.total,
+        c.done,
+        progress(p),
+        `<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`
+      ];
+    })
+  );
+}
+
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect"))return;
+
+  const selectedId=workerWaveSelect.value;
+  workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
+
+  const w=waves.find(x=>x.id===selectedId)||waves[0];
+
+  if(!w){
+    workerCards.innerHTML="";
+    workerActions.innerHTML="";
+    workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;
+    nextWave.innerHTML="";
+    return;
+  }
+
+  workerWaveSelect.value=w.id;
+
+  const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];
+  nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:"אין גל הבא כרגע";
+
+  const c=counts(w);
+  workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+
+  workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+
+  const sortedItems = sortItemsByLocation(w.items);
+
+  workerItems.innerHTML=table(
+    ["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location||"ללא מיקום"),
+      esc(i.model),
+      esc(i.mix||"A"),
+      esc(i.qty||1),
+      `${statusLabel(i.status)}<br><span class="small">${esc(formatIL(i.picked_at)||"")}</span>`,
+      `<div class="actions"><button class="green" onclick="setItemStatus('${i.id}','picked')">לוקט</button><select id="mix_${i.id}" style="width:80px">${MIXES.map(m=>`<option>${m}</option>`).join("")}</select><button class="orange" onclick="setItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button><button class="red" onclick="setItemStatus('${i.id}','not_found')">לא נמצא</button><button class="gray" onclick="setItemStatus('${i.id}','open')">בטל סימון</button></div>`
+    ]),
+    sortedItems.map(i=>i.status)
+  );
+}
