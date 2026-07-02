@@ -359,3 +359,43 @@ app.post("/api/assign/bulk", requireAdmin, async (req,res)=>{
 
   res.json({ok:true, assigned, skipped});
 });
+
+db.run("ALTER TABLE wave_items ADD COLUMN picked_model TEXT", () => {});
+
+app.post("/api/item/status_pants_safe", requireLogin, async (req,res)=>{
+  const itemId = req.body.itemId || req.body.item_id;
+  const status = String(req.body.status || "").trim();
+  const pickedModel = String(req.body.pickedModel || req.body.picked_model || "").trim();
+  const actualMix = req.body.actualMix || req.body.actual_mix || "";
+
+  const item = await get(`SELECT wi.*, w.assigned_to, w.id AS wave_id, w.source_type, w.source_label
+    FROM wave_items wi
+    JOIN waves w ON w.id = wi.wave_id
+    WHERE wi.id=?`, [itemId]);
+
+  if(!item) return res.status(404).json({error:"פריט לא נמצא"});
+
+  if(normalizeRole(req.session.user.role)!=="admin" && item.assigned_to !== req.session.user.username){
+    return res.status(403).json({error:"אין הרשאה לפריט הזה"});
+  }
+
+  const isPants = String(item.source_type || "").toLowerCase() === "pants" || String(item.source_label || "").includes("מכנס");
+
+  if(isPants && status === "picked" && !/^\d{6}$/.test(pickedModel)){
+    return res.status(400).json({error:"מספר הספרות בדגם אינו תואם"});
+  }
+
+  if(status === "open"){
+    await run(`UPDATE wave_items
+      SET status='open', actual_mix='', picked_model='', picked_by='', picked_at=''
+      WHERE id=?`, [itemId]);
+  } else {
+    await run(`UPDATE wave_items
+      SET status=?, actual_mix=?, picked_model=?, picked_by=?, picked_at=?
+      WHERE id=?`, [status, actualMix || "", pickedModel || "", req.session.user.username, now(), itemId]);
+
+    await run("UPDATE waves SET status='active' WHERE id=? AND status IN ('open','assigned')", [item.wave_id]);
+  }
+
+  res.json({ok:true});
+});
