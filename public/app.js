@@ -339,3 +339,110 @@ setTimeout(()=>{
   if(me?.role === "worker") renderWorkerPage(); 
 }, 800);
 
+function klcPantsModelInput(i){
+  return `
+    <div class="pants-model-inline">
+      <span class="pants-model-label">הזן דגם</span>
+      <input
+        id="picked_model_${i.id}"
+        type="number"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        value="${esc(i.picked_model || "")}"
+        placeholder="מספר דגם"
+        class="picked-model-input-compact"
+      />
+    </div>
+  `;
+}
+
+function klcPickPantsItem(itemId){
+  const el = document.getElementById(`picked_model_${itemId}`);
+  const val = String(el?.value || "").trim();
+
+  if(!val){
+    alert("חובה להזין מספר דגם לפני סימון לוקט");
+    if(el) el.focus();
+    return;
+  }
+
+  klcSetItemStatus(itemId, "picked", "", val);
+}
+
+function klcPantsActions(i){
+  return `
+    <div class="actions pants-actions compact-pants-actions">
+      <button class="green" onclick="klcPickPantsItem('${i.id}')">לוקט</button>
+      <button class="red" onclick="klcSetItemStatus('${i.id}','not_found','',document.getElementById('picked_model_${i.id}')?.value || '')">אין מלאי</button>
+      <button class="gray" onclick="klcSetItemStatus('${i.id}','open')">בטל סימון</button>
+    </div>
+  `;
+}
+
+// החלפה סופית של מסך העובד כדי שהדגם יישאר באותה שורה וההזנה תהיה קטנה מתחתיו
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect")) return;
+
+  const selectedId = workerWaveSelect.value;
+
+  workerWaveSelect.innerHTML = waves.map(w =>
+    `<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`
+  ).join("") || "<option value='__none__'>אין גלי ליקוט</option>";
+
+  const w = waves.find(x=>x.id===selectedId) || waves[0];
+
+  if(!w){
+    workerCards.innerHTML = "";
+    workerActions.innerHTML = "";
+    workerItems.innerHTML = `<div class="panel">אין גלים משויכים כרגע.</div>`;
+    nextWave.innerHTML = "";
+    return;
+  }
+
+  workerWaveSelect.value = w.id;
+
+  const idx = waves.findIndex(x=>x.id===w.id);
+  const next = waves[idx+1];
+  nextWave.innerHTML = next
+    ? `הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`
+    : "אין גל הבא כרגע";
+
+  const c = counts(w);
+  workerCards.innerHTML = `
+    <div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div>
+    <div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div>
+    <div class="card"><b>${esc(w.store)}</b><span>חנות</span></div>
+    <div class="card"><b>${c.total}</b><span>יחידות</span></div>
+    <div class="card"><b>${c.done}</b><span>טופלו</span></div>
+    <div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>
+  `;
+
+  workerActions.innerHTML = `
+    <div class="panel actions">
+      <button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button>
+      <button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button>
+    </div>
+  `;
+
+  const sortedItems = typeof sortItemsByLocation === "function"
+    ? sortItemsByLocation(w.items)
+    : (w.items || []);
+
+  const isPants = klcIsPantsWave(w);
+
+  workerItems.innerHTML = table(
+    ["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location || "ללא מיקום"),
+      isPants
+        ? `<div class="pants-model-cell"><div class="pants-required-model">${esc(i.model)}</div>${klcPantsModelInput(i)}</div>`
+        : esc(i.model),
+      esc(i.mix || "A"),
+      esc(i.qty || 1),
+      `${statusLabel(i.status)}<br><span class="small">${esc(formatIL(i.picked_at)||"")}</span>${i.picked_model?`<br><span class="small">דגם שלוקט: ${esc(i.picked_model)}</span>`:""}`,
+      isPants ? klcPantsActions(i) : klcRegularActions(i)
+    ]),
+    sortedItems.map(i=>i.status)
+  );
+}
+
