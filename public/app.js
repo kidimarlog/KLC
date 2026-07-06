@@ -13,3 +13,106 @@ function groupRows(rows,keyFn){const out={};rows.forEach(r=>{const k=keyFn(r)||'
 async function renderPersonalStatus(){if(me?.role!=='worker')return;personalRows=await api('/api/my-performance').catch(()=>[]);let rows=[...personalRows];if(personalDate.value)rows=rows.filter(r=>(r.picked_at||'').startsWith(personalDate.value));const by={};rows.filter(r=>r.status!=='open').forEach(r=>{const k=(shortDate(r.picked_at)||'ללא תאריך')+'||'+r.store;if(!by[k])by[k]={date:shortDate(r.picked_at)||'ללא תאריך',store:r.store,rows:0,waves:new Set()};by[k].rows++;by[k].waves.add(r.wave_id)});const sr=Object.values(by).map(o=>[esc(o.date),`<span class="clickable" onclick="showPersonalStore('${esc(o.store)}')">${esc(o.store)}</span>`,o.rows,o.waves.size]);sr.push(['<b>סה״כ</b>',`<b>${new Set(Object.values(by).map(o=>o.store)).size} חנויות</b>`,`<b>${Object.values(by).reduce((s,o)=>s+o.rows,0)}</b>`,'']);personalByStore.innerHTML=table(['תאריך','חנות','שורות','משטחים'],sr);personalDailyPercent.innerHTML=table(['תאריך','שורות שלי','סה״כ יומי','אחוז'],groupRows(rows,r=>shortDate(r.picked_at)||'ללא תאריך').slice(0,10))}function showPersonalStore(store){const rows=personalRows.filter(r=>r.store===store&&r.status!=='open'),by={};rows.forEach(r=>{if(!by[r.wave_id])by[r.wave_id]={wave:r.wave_no,date:formatIL(r.closed_at||r.picked_at),rows:0};by[r.wave_id].rows++});personalPallets.innerHTML=table(['משטח/גל','תאריך','שורות'],Object.entries(by).map(([id,o])=>[`<span class="clickable" onclick="showPersonalWaveItems('${id}')">${esc(o.wave)}</span>`,esc(o.date),o.rows]))}function showPersonalWaveItems(id){personalPalletItems.innerHTML=table(['דגם','מיקס','כמות','סטטוס','מיקום'],personalRows.filter(r=>r.wave_id===id).map(r=>[esc(r.model),esc(r.mix),r.qty,statusLabel(r.status),esc(r.location||'')]))}
 function renderCorrections(){if(me?.role!=='admin'||!document.getElementById('correctionStores'))return;let rows=[...analytics];if(correctionStoreFilter.value)rows=rows.filter(r=>String(r.store||'').includes(correctionStoreFilter.value));if(correctionDateFilter.value)rows=rows.filter(r=>(r.picked_at||'').startsWith(correctionDateFilter.value));const stores=[...new Set(rows.map(r=>r.store).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'he'));correctionStores.innerHTML=table(['חנות'],stores.map(s=>[`<span class="clickable" onclick="showCorrectionStore('${esc(s)}')">${esc(s)}</span>`]));correctionWaves.innerHTML='';correctionItems.innerHTML=''}function showCorrectionStore(store){const rows=analytics.filter(r=>r.store===store),ids=[...new Set(rows.map(r=>r.wave_id))];correctionWaves.innerHTML=table(['גל','סוג','מלקט','סטטוס','שורות'],ids.map(id=>{const w=waves.find(x=>x.id===id);return[`<span class="clickable" onclick="showCorrectionWave('${id}')">${esc(w?.wave_no||id)}</span>`,esc(w?.source_label||''),esc(w?.assigned_to||'לא שויך'),statusLabel(w?.status||''),rows.filter(r=>r.wave_id===id).length]}));correctionItems.innerHTML=''}function correctionSelect(id,st){return`<select id="corr_${id}"><option value="picked" ${st==='picked'?'selected':''}>לוקט</option><option value="alt_mix" ${st==='alt_mix'?'selected':''}>לוקט מיקס אחר</option><option value="not_found" ${st==='not_found'?'selected':''}>לא נמצא</option><option value="open" ${st==='open'?'selected':''}>פתוח</option></select><button onclick="saveCorrection('${id}')">שמור</button>`}function showCorrectionWave(id){const rows=analytics.filter(r=>r.wave_id===id);correctionItems.innerHTML=table(['דגם','מיקס','כמות','מיקום','סטטוס','תיקון'],rows.map(r=>[esc(r.model),esc(r.mix),r.qty,esc(r.location||''),statusLabel(r.status),correctionSelect(r.item_id,r.status)]),rows.map(r=>r.status))}async function saveCorrection(id){const st=document.getElementById(`corr_${id}`).value;await setItemStatus(id,st);analytics=await api('/api/analytics');renderCorrections()}
 boot();setInterval(()=>{if(me)refresh()},15000);
+
+
+// ===== KLC v2.1 Barcode scanner for pants waves =====
+let klcBarcodeStream = null;
+let klcBarcodeTimer = null;
+let klcBarcodeTargetItemId = null;
+
+function ensureBarcodeModal(){
+  if(document.getElementById('barcodeModal')) return;
+  const div = document.createElement('div');
+  div.id = 'barcodeModal';
+  div.className = 'barcode-modal hidden';
+  div.innerHTML = `
+    <div class="barcode-box">
+      <h2>סריקת ברקוד</h2>
+      <p>המצלמה פעילה רק במסך הזה ותיסגר מיד בסיום הסריקה או בלחיצה על ביטול.</p>
+      <video id="barcodeVideo" playsinline muted></video>
+      <div class="actions barcode-actions">
+        <button class="gray" onclick="stopBarcodeScanner()">ביטול וסגירת מצלמה</button>
+      </div>
+      <div class="small">אם הסריקה לא זמינה במכשיר, אפשר להקליד ידנית בשדה הברקוד.</div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+async function startBarcodeScanner(itemId){
+  klcBarcodeTargetItemId = itemId;
+  ensureBarcodeModal();
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    alert('הדפדפן לא מאפשר גישה למצלמה. אפשר להקליד את הברקוד ידנית.');
+    return;
+  }
+
+  if(!('BarcodeDetector' in window)){
+    alert('סריקת ברקוד אוטומטית לא נתמכת בדפדפן הזה. אפשר להקליד את הברקוד ידנית.');
+    return;
+  }
+
+  const modal = document.getElementById('barcodeModal');
+  const video = document.getElementById('barcodeVideo');
+  modal.classList.remove('hidden');
+
+  try{
+    klcBarcodeStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+    video.srcObject = klcBarcodeStream;
+    await video.play();
+
+    const detector = new BarcodeDetector({formats:['code_128','ean_13','ean_8','code_39','itf','upc_a','upc_e','qr_code']});
+    klcBarcodeTimer = setInterval(async ()=>{
+      try{
+        const codes = await detector.detect(video);
+        if(codes && codes.length){
+          const val = String(codes[0].rawValue || '').trim();
+          if(val){
+            const input = document.getElementById(`picked_model_${klcBarcodeTargetItemId}`);
+            if(input) input.value = val;
+            stopBarcodeScanner(false);
+            alert('הברקוד נסרק ונשמר בשדה. כעת לחץ לוקט.');
+          }
+        }
+      }catch(err){}
+    }, 450);
+  }catch(e){
+    stopBarcodeScanner(false);
+    alert('לא ניתנה הרשאה למצלמה או שהמצלמה אינה זמינה. אפשר להקליד את הברקוד ידנית.');
+  }
+}
+
+function stopBarcodeScanner(showAlert=true){
+  if(klcBarcodeTimer){ clearInterval(klcBarcodeTimer); klcBarcodeTimer = null; }
+  if(klcBarcodeStream){
+    klcBarcodeStream.getTracks().forEach(t=>t.stop());
+    klcBarcodeStream = null;
+  }
+  const video = document.getElementById('barcodeVideo');
+  if(video) video.srcObject = null;
+  const modal = document.getElementById('barcodeModal');
+  if(modal) modal.classList.add('hidden');
+  klcBarcodeTargetItemId = null;
+}
+
+function pickPants(itemId){
+  const el=document.getElementById(`picked_model_${itemId}`), val=String(el?.value||'').trim();
+  if(!val){alert('חובה לסרוק או להזין ברקוד לפני סימון לוקט');el?.focus();return}
+  setItemStatus(itemId,'picked','',val);
+}
+
+function pantsInput(i){
+  return `<div class="pants-entry-line barcode-entry-line">
+    <span class="pants-entry-label">ברקוד</span>
+    <input id="picked_model_${i.id}" type="tel" inputmode="numeric" value="${esc(i.picked_model||'')}" placeholder="סרוק / הקלד" class="pants-entry-input barcode-input" />
+    <button type="button" class="barcode-scan-btn" onclick="startBarcodeScanner('${i.id}')">סרוק</button>
+  </div>`;
+}
+
+function pantsActions(i){
+  return `<div class="actions pants-actions-final"><button class="green" onclick="pickPants('${i.id}')">לוקט</button><button class="red" onclick="setItemStatus('${i.id}','not_found','',document.getElementById('picked_model_${i.id}')?.value||'')">אין מלאי</button><button class="gray" onclick="setItemStatus('${i.id}','open')">בטל סימון</button></div>`;
+}
+
+function renderWorkerPage(){if(!document.getElementById('workerWaveSelect'))return;const selected=workerWaveSelect.value;workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join('')||'<option value="__none__">אין גלי ליקוט</option>';const w=waves.find(x=>x.id===selected)||waves[0];if(!w){workerCards.innerHTML='';workerActions.innerHTML='';workerItems.innerHTML='<div class="panel">אין גלים משויכים כרגע.</div>';nextWave.innerHTML='';return}workerWaveSelect.value=w.id;const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:'אין גל הבא כרגע';const c=counts(w);workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;const items=sortItemsByLocation(w.items),pants=isPantsWave(w);workerItems.innerHTML=table(['מיקום','דגם','מיקס / מידה','כמות','סטטוס','פעולות'],items.map(i=>[esc(i.location||'ללא מיקום'),pants?`<div class="pants-model-clean"><div class="pants-required-clean">${esc(i.model)}</div>${pantsInput(i)}</div>`:esc(i.model),esc(i.mix||'A'),esc(i.qty||1),`${statusLabel(i.status)}${i.picked_model?`<br><span class="small">ברקוד שנסרק: ${esc(i.picked_model)}</span>`:''}`,pants?pantsActions(i):regularActions(i)]),items.map(i=>i.status))}
+
+function renderAnalytics(){if(me?.role!=='admin'||!document.getElementById('filterWorker'))return;const old=filterWorker.value||'all';filterWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join('');filterWorker.value=old;let rows=[...analytics];if(filterWorker.value!=='all')rows=rows.filter(r=>r.picked_by===filterWorker.value||r.assigned_to===filterWorker.value);if(filterStatus.value!=='all')rows=rows.filter(r=>r.status===filterStatus.value);if(filterSourceType.value!=='all')rows=rows.filter(r=>r.source_type===filterSourceType.value);const dates=filterDates.value.split(',').map(x=>x.trim()).filter(Boolean);if(dates.length)rows=rows.filter(r=>dates.some(d=>(r.picked_at||'').startsWith(d)));analyticsCards.innerHTML=`<div class="card"><b>${rows.length}</b><span>שורות</span></div><div class="card"><b>${rows.filter(r=>r.status==='picked').length}</b><span>לוקט</span></div><div class="card"><b>${rows.filter(r=>r.status==='not_found').length}</b><span>לא נמצא</span></div><div class="card"><b>${new Set(rows.map(r=>r.wave_id)).size}</b><span>גלים</span></div>`;const by={};rows.forEach(r=>{const n=r.picked_by||r.assigned_to||'לא שויך';if(!by[n])by[n]={rows:0,done:0,waves:new Set()};by[n].rows++;if(r.status!=='open')by[n].done++;by[n].waves.add(r.wave_id)});workerSummaryTable.innerHTML=table(['עובד','שורות','טופלו','גלים'],Object.entries(by).map(([n,o])=>[esc(n),o.rows,o.done,o.waves.size]));analyticsTable.innerHTML=table(['גל','סוג','חנות','עובד','דגם נדרש','ברקוד שנסרק','מיקס','כמות','מיקום','סטטוס','מיקס בפועל','תאריך'],rows.map(r=>[esc(r.wave_no),esc(r.source_label),esc(r.store),esc(r.picked_by||r.assigned_to||''),esc(r.model),esc(r.picked_model||''),esc(r.mix),r.qty,esc(r.location||''),statusLabel(r.status),esc(r.actual_mix||''),formatIL(r.picked_at)]),rows.map(r=>r.status))}
