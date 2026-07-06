@@ -195,3 +195,134 @@ setInterval(klcStoreVisibleBarcodeInputs, 300);
 
 // If the built-in scanner updates the input value directly, this interval catches it.
 // Also improves behavior after detector writes the value and the 15-sec refresh redraws the screen.
+
+
+// ===== KLC v2.2 - clean wave actions + admin code edit =====
+window.klcBarcodeDrafts = window.klcBarcodeDrafts || {};
+
+function klcWaveType(w){
+  const t=String(w?.source_type||"").toLowerCase(), label=String(w?.source_label||""), no=String(w?.wave_no||"");
+  if(t==="pants"||label.includes("מכנס")||no.includes("-P-")) return "pants";
+  if(t==="daily"||label.includes("יומי")||no.includes("-D-")) return "daily";
+  if(t==="melange"||label.includes("מלאנז")||label.includes("מלנז")||no.includes("-M-")) return "melange";
+  return t||"regular";
+}
+function klcGetBarcodeValue(itemId){
+  const el=document.getElementById(`picked_model_${itemId}`)||document.getElementById(`barcode_${itemId}`);
+  return String(el?.value||window.klcBarcodeDrafts[itemId]||"").trim();
+}
+function klcSetBarcodeValue(itemId,value){
+  const val=String(value||"").trim();
+  window.klcBarcodeDrafts[itemId]=val;
+  const el=document.getElementById(`picked_model_${itemId}`)||document.getElementById(`barcode_${itemId}`);
+  if(el) el.value=val;
+}
+async function klcSaveItemStatus(itemId,status,actualMix="",barcode=""){
+  try{
+    if(barcode || status==="picked" || status==="not_found" || status==="open"){
+      await api("/api/item/status_barcode_v22",{method:"POST",body:JSON.stringify({itemId,status,actualMix,barcode})});
+    }else{
+      await api("/api/item/status",{method:"POST",body:JSON.stringify({itemId,status,actualMix,pickedModel:""})});
+    }
+    if(status==="open") delete window.klcBarcodeDrafts[itemId];
+    await refresh();
+  }catch(e){ alert(e.message||"לא ניתן לשמור את השורה"); }
+}
+async function setItemStatus(itemId,status,actualMix="",pickedModel=""){
+  return klcSaveItemStatus(itemId,status,actualMix,pickedModel);
+}
+function klcPickPants(itemId){
+  const barcode=klcGetBarcodeValue(itemId);
+  if(!barcode){
+    const el=document.getElementById(`picked_model_${itemId}`)||document.getElementById(`barcode_${itemId}`);
+    alert("חובה לסרוק או להזין ברקוד לפני סימון לוקט");
+    if(el) el.focus();
+    return;
+  }
+  klcSaveItemStatus(itemId,"picked","",barcode);
+}
+function klcPantsInput(i){
+  const saved=window.klcBarcodeDrafts[i.id]||i.picked_model||"";
+  return `<div class="pants-entry-line barcode-entry-line">
+    <span class="pants-entry-label">ברקוד</span>
+    <input id="picked_model_${i.id}" type="tel" inputmode="numeric" value="${esc(saved)}" placeholder="סרוק / הזן ברקוד" class="pants-entry-input barcode-entry-input" oninput="klcSetBarcodeValue('${i.id}',this.value)" />
+    <button type="button" class="barcode-scan-btn scan-btn" onclick="klcStartScanSafe('${i.id}')">סרוק</button>
+  </div>`;
+}
+function klcPantsActions(i){
+  return `<div class="actions pants-actions-final">
+    <button class="green" onclick="klcPickPants('${i.id}')">לוקט</button>
+    <button class="red" onclick="klcSaveItemStatus('${i.id}','not_found','',klcGetBarcodeValue('${i.id}'))">אין מלאי</button>
+    <button class="gray" onclick="klcSaveItemStatus('${i.id}','open')">בטל סימון</button>
+  </div>`;
+}
+function klcRegularActions(i){
+  return `<div class="actions regular-actions-final">
+    <button class="green" onclick="klcSaveItemStatus('${i.id}','picked')">לוקט</button>
+    <select id="mix_${i.id}" style="width:90px">${MIXES.map(m=>`<option>${m}</option>`).join("")}</select>
+    <button class="orange" onclick="klcSaveItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button>
+    <button class="red" onclick="klcSaveItemStatus('${i.id}','not_found')">לא נמצא</button>
+    <button class="gray" onclick="klcSaveItemStatus('${i.id}','open')">בטל סימון</button>
+  </div>`;
+}
+async function klcStartScanSafe(itemId){
+  window.klcCurrentScanTarget=itemId;
+  if(typeof startBarcodeScanner==="function") return startBarcodeScanner(itemId);
+  if(typeof openBarcodeScanner==="function") return openBarcodeScanner(itemId);
+  if(typeof scanBarcode==="function") return scanBarcode(itemId);
+  alert("סורק הברקוד לא זמין בדפדפן הזה. אפשר להזין ידנית.");
+}
+setInterval(()=>{document.querySelectorAll("[id^='picked_model_'],[id^='barcode_']").forEach(el=>{const id=el.id.replace("picked_model_","").replace("barcode_","");if(id&&el.value)window.klcBarcodeDrafts[id]=el.value;});},300);
+
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect"))return;
+  const selectedId=workerWaveSelect.value;
+  workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
+  const w=waves.find(x=>x.id===selectedId)||waves[0];
+  if(!w){workerCards.innerHTML="";workerActions.innerHTML="";workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;nextWave.innerHTML="";return;}
+  workerWaveSelect.value=w.id;
+  const idx=waves.findIndex(x=>x.id===w.id), next=waves[idx+1];
+  nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:"אין גל הבא כרגע";
+  const c=counts(w);
+  workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+  workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+  const sortedItems=typeof sortItemsByLocation==="function"?sortItemsByLocation(w.items):(w.items||[]);
+  const waveType=klcWaveType(w);
+  workerItems.innerHTML=table(["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location||"ללא מיקום"),
+      waveType==="pants"?`<div class="pants-model-clean"><div class="pants-required-clean">${esc(i.model)}</div>${klcPantsInput(i)}</div>`:esc(i.model),
+      esc(i.mix||"A"),
+      esc(i.qty||1),
+      `${statusLabel(i.status)}${i.picked_model?`<br><span class="small">${waveType==="pants"?"ברקוד":"דגם"}: ${esc(i.picked_model)}</span>`:""}`,
+      waveType==="pants"?klcPantsActions(i):klcRegularActions(i)
+    ]),
+    sortedItems.map(i=>i.status)
+  );
+}
+
+async function changeAdminCode(userId){
+  const code=prompt("הזן קוד כניסה חדש ל-ADMIN:");
+  if(!code)return;
+  const confirmCode=prompt("הקלד שוב את הקוד החדש:");
+  if(code!==confirmCode){alert("הקודים אינם תואמים");return;}
+  try{
+    await api(`/api/users/${userId}`,{method:"PATCH",body:JSON.stringify({code})});
+    alert("קוד ADMIN עודכן בהצלחה");
+    await refresh();
+  }catch(e){alert(e.message||"לא ניתן לעדכן קוד ADMIN");}
+}
+function renderUsers(){
+  if(!document.getElementById("usersTable"))return;
+  usersTable.innerHTML=table(["שם משתמש","קוד","הרשאה","פעיל","פעולה"],
+    users.map(u=>{
+      const admin=String(u.username).toLowerCase()==="admin";
+      const actions=admin
+        ? `<button class="orange" onclick="changeAdminCode(${u.id})">שנה קוד ADMIN</button>`
+        : `<div class="actions"><button class="gray" onclick="toggleUser(${u.id},${isActive(u)})">${isActive(u)?"השבת":"הפעל"}</button><button class="orange" onclick="editUser(${u.id},'${esc(u.username)}','${esc(u.code_plain)}','${esc(u.role)}')">ערוך</button><button class="red" onclick="deleteUser(${u.id},'${esc(u.username)}')">מחק</button></div>`;
+      return [esc(u.username), admin?"********":esc(u.code_plain), esc(u.role_label), isActive(u)?"כן":"לא", actions];
+    })
+  );
+}
+setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},500);
+setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},1500);

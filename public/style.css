@@ -7,3 +7,28 @@
 .barcode-scan-btn{padding:6px 10px!important;min-height:30px!important;font-size:12px!important;border-radius:8px!important;background:#1d4ed8!important;color:#fff!important;white-space:nowrap!important}
 .barcode-modal{position:fixed;inset:0;background:rgba(15,23,42,.78);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px}.barcode-modal.hidden{display:none!important}.barcode-box{background:#fff;border-radius:22px;max-width:520px;width:100%;padding:18px;box-shadow:0 22px 80px rgba(0,0,0,.35);text-align:center}.barcode-box h2{margin-top:0}.barcode-box video{width:100%;max-height:55vh;background:#111;border-radius:16px}.barcode-actions{margin-top:12px;display:grid!important;grid-template-columns:1fr!important}
 @media(max-width:900px){.barcode-entry-line{max-width:220px!important}.barcode-input{width:96px!important;font-size:14px!important}.barcode-scan-btn{font-size:13px!important;min-height:34px!important;padding:6px 9px!important}.barcode-box{padding:14px}.barcode-box video{max-height:60vh}}
+
+
+/* KLC v2.1.1 - שדה ברקוד בכל אורך ושמירה נוחה */
+.barcode-entry-line { max-width: 260px !important; height: auto !important; min-height: 38px !important; }
+.barcode-entry-input { width: 145px !important; max-width: 180px !important; min-width: 120px !important; direction: ltr !important; }
+.scan-btn, .barcode-scan-btn { margin-top: 6px !important; width: 100% !important; max-width: 260px !important; min-height: 38px !important; background: #2563eb !important; color: #fff !important; }
+@media (max-width: 900px) {
+  .barcode-entry-line { max-width: 100% !important; }
+  .barcode-entry-input { width: 100% !important; max-width: 100% !important; min-width: 160px !important; }
+  .scan-btn, .barcode-scan-btn { max-width: 100% !important; min-height: 46px !important; font-size: 16px !important; }
+}
+
+
+/* KLC v2.2 - פעולות יציבות לפי סוג גל */
+.regular-actions-final{display:grid!important;grid-template-columns:1fr!important;gap:7px!important}
+.regular-actions-final button,.regular-actions-final select{width:100%!important;min-height:42px!important}
+.barcode-entry-line{max-width:260px!important;height:auto!important;min-height:38px!important}
+.barcode-entry-input{width:145px!important;max-width:180px!important;min-width:120px!important;direction:ltr!important}
+.scan-btn,.barcode-scan-btn{margin-top:6px!important;width:100%!important;max-width:260px!important;min-height:38px!important;background:#2563eb!important;color:#fff!important}
+@media(max-width:900px){
+  .regular-actions-final button,.regular-actions-final select{min-height:50px!important;font-size:16px!important}
+  .barcode-entry-line{max-width:100%!important}
+  .barcode-entry-input{width:100%!important;max-width:100%!important;min-width:160px!important}
+  .scan-btn,.barcode-scan-btn{max-width:100%!important;min-height:46px!important;font-size:16px!important}
+}
