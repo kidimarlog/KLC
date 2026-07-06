@@ -116,3 +116,82 @@ function pantsActions(i){
 function renderWorkerPage(){if(!document.getElementById('workerWaveSelect'))return;const selected=workerWaveSelect.value;workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join('')||'<option value="__none__">אין גלי ליקוט</option>';const w=waves.find(x=>x.id===selected)||waves[0];if(!w){workerCards.innerHTML='';workerActions.innerHTML='';workerItems.innerHTML='<div class="panel">אין גלים משויכים כרגע.</div>';nextWave.innerHTML='';return}workerWaveSelect.value=w.id;const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:'אין גל הבא כרגע';const c=counts(w);workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;const items=sortItemsByLocation(w.items),pants=isPantsWave(w);workerItems.innerHTML=table(['מיקום','דגם','מיקס / מידה','כמות','סטטוס','פעולות'],items.map(i=>[esc(i.location||'ללא מיקום'),pants?`<div class="pants-model-clean"><div class="pants-required-clean">${esc(i.model)}</div>${pantsInput(i)}</div>`:esc(i.model),esc(i.mix||'A'),esc(i.qty||1),`${statusLabel(i.status)}${i.picked_model?`<br><span class="small">ברקוד שנסרק: ${esc(i.picked_model)}</span>`:''}`,pants?pantsActions(i):regularActions(i)]),items.map(i=>i.status))}
 
 function renderAnalytics(){if(me?.role!=='admin'||!document.getElementById('filterWorker'))return;const old=filterWorker.value||'all';filterWorker.innerHTML=`<option value="all">כל העובדים</option>`+users.map(u=>`<option>${esc(u.username)}</option>`).join('');filterWorker.value=old;let rows=[...analytics];if(filterWorker.value!=='all')rows=rows.filter(r=>r.picked_by===filterWorker.value||r.assigned_to===filterWorker.value);if(filterStatus.value!=='all')rows=rows.filter(r=>r.status===filterStatus.value);if(filterSourceType.value!=='all')rows=rows.filter(r=>r.source_type===filterSourceType.value);const dates=filterDates.value.split(',').map(x=>x.trim()).filter(Boolean);if(dates.length)rows=rows.filter(r=>dates.some(d=>(r.picked_at||'').startsWith(d)));analyticsCards.innerHTML=`<div class="card"><b>${rows.length}</b><span>שורות</span></div><div class="card"><b>${rows.filter(r=>r.status==='picked').length}</b><span>לוקט</span></div><div class="card"><b>${rows.filter(r=>r.status==='not_found').length}</b><span>לא נמצא</span></div><div class="card"><b>${new Set(rows.map(r=>r.wave_id)).size}</b><span>גלים</span></div>`;const by={};rows.forEach(r=>{const n=r.picked_by||r.assigned_to||'לא שויך';if(!by[n])by[n]={rows:0,done:0,waves:new Set()};by[n].rows++;if(r.status!=='open')by[n].done++;by[n].waves.add(r.wave_id)});workerSummaryTable.innerHTML=table(['עובד','שורות','טופלו','גלים'],Object.entries(by).map(([n,o])=>[esc(n),o.rows,o.done,o.waves.size]));analyticsTable.innerHTML=table(['גל','סוג','חנות','עובד','דגם נדרש','ברקוד שנסרק','מיקס','כמות','מיקום','סטטוס','מיקס בפועל','תאריך'],rows.map(r=>[esc(r.wave_no),esc(r.source_label),esc(r.store),esc(r.picked_by||r.assigned_to||''),esc(r.model),esc(r.picked_model||''),esc(r.mix),r.qty,esc(r.location||''),statusLabel(r.status),esc(r.actual_mix||''),formatIL(r.picked_at)]),rows.map(r=>r.status))}
+
+
+// ===== KLC v2.1.1 full override: barcode persists, any length =====
+window.klcBarcodeDrafts = window.klcBarcodeDrafts || {};
+
+function klcGetBarcodeValue(itemId){
+  const el = document.getElementById(`picked_model_${itemId}`) || document.getElementById(`barcode_${itemId}`);
+  return String(el?.value || window.klcBarcodeDrafts[itemId] || "").trim();
+}
+
+function klcSetBarcodeValue(itemId, value){
+  const val = String(value || "").trim();
+  window.klcBarcodeDrafts[itemId] = val;
+  const el1 = document.getElementById(`picked_model_${itemId}`);
+  const el2 = document.getElementById(`barcode_${itemId}`);
+  if(el1) el1.value = val;
+  if(el2) el2.value = val;
+}
+
+async function setItemStatus(itemId,status,actualMix='',pickedModel=''){
+  try{
+    if(status === 'picked' || status === 'not_found' || status === 'open'){
+      const barcode = pickedModel || klcGetBarcodeValue(itemId);
+      await api('/api/item/status_barcode',{method:'POST',body:JSON.stringify({itemId,status,actualMix,barcode})});
+    }else{
+      await api('/api/item/status',{method:'POST',body:JSON.stringify({itemId,status,actualMix,pickedModel})});
+    }
+    if(status === 'open') delete window.klcBarcodeDrafts[itemId];
+    await refresh();
+  }catch(e){ alert(e.message || 'לא ניתן לשמור את השורה'); }
+}
+
+function pickPants(itemId){
+  const val = klcGetBarcodeValue(itemId);
+  if(!val){
+    const el = document.getElementById(`picked_model_${itemId}`) || document.getElementById(`barcode_${itemId}`);
+    alert('חובה לסרוק או להזין ברקוד לפני סימון לוקט');
+    if(el) el.focus();
+    return;
+  }
+  setItemStatus(itemId,'picked','',val);
+}
+
+function pantsInput(i){
+  const saved = window.klcBarcodeDrafts[i.id] || i.picked_model || '';
+  return `<div class="pants-entry-line barcode-entry-line">
+    <span class="pants-entry-label">ברקוד</span>
+    <input id="picked_model_${i.id}" type="tel" inputmode="numeric" value="${esc(saved)}" placeholder="סרוק / הזן ברקוד" class="pants-entry-input barcode-entry-input" oninput="klcSetBarcodeValue('${i.id}', this.value)" />
+    <button type="button" class="barcode-scan-btn scan-btn" onclick="startBarcodeScanner('${i.id}')">סרוק</button>
+  </div>`;
+}
+
+function pantsActions(i){
+  return `<div class="actions pants-actions-final">
+    <button class="green" onclick="pickPants('${i.id}')">לוקט</button>
+    <button class="red" onclick="setItemStatus('${i.id}','not_found','',klcGetBarcodeValue('${i.id}'))">אין מלאי</button>
+    <button class="gray" onclick="setItemStatus('${i.id}','open')">בטל סימון</button>
+  </div>`;
+}
+
+// Override scanner so scanned barcode is also stored in local draft before auto-refresh.
+if(typeof startBarcodeScanner === 'function'){
+  const klcOriginalStartBarcodeScanner = startBarcodeScanner;
+  startBarcodeScanner = async function(itemId){
+    window.klcCurrentScanTarget = itemId;
+    return klcOriginalStartBarcodeScanner(itemId);
+  }
+}
+
+function klcStoreVisibleBarcodeInputs(){
+  document.querySelectorAll("[id^='picked_model_'], [id^='barcode_']").forEach(el=>{
+    const id = el.id.replace('picked_model_','').replace('barcode_','');
+    if(id && el.value) window.klcBarcodeDrafts[id] = el.value;
+  });
+}
+setInterval(klcStoreVisibleBarcodeInputs, 300);
+
+// If the built-in scanner updates the input value directly, this interval catches it.
+// Also improves behavior after detector writes the value and the 15-sec refresh redraws the screen.
