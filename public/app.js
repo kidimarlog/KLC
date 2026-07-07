@@ -326,3 +326,362 @@ function renderUsers(){
 }
 setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},500);
 setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},1500);
+
+
+// ===== KLC v2.3 - סורק ברקוד משופר למחסן =====
+// מצלמה נפתחת רק בלחיצה על "סרוק", ונסגרת מיד בסריקה/ביטול.
+// אין שמירת תמונה/וידאו. נשמר רק ערך הברקוד.
+
+let klcBarcodeStreamV23 = null;
+let klcBarcodeTimerV23 = null;
+let klcBarcodeTargetItemIdV23 = null;
+let klcBarcodeDetectorV23 = null;
+let klcLastDetectedV23 = "";
+let klcStableDetectedCountV23 = 0;
+let klcBarcodeCanvasV23 = null;
+let klcBarcodeCtxV23 = null;
+
+function klcEnsureBarcodeModalV23(){
+  let modal = document.getElementById("barcodeModal");
+  if(modal) return modal;
+
+  modal = document.createElement("div");
+  modal.id = "barcodeModal";
+  modal.className = "barcode-modal hidden";
+  modal.innerHTML = `
+    <div class="barcode-box barcode-box-v23">
+      <h2>סריקת ברקוד</h2>
+      <p>כוון את הברקוד למרכז המסגרת. מומלץ לקרב את הטלפון עד שהקווים ממלאים את המסגרת.</p>
+
+      <div class="barcode-video-wrap">
+        <video id="barcodeVideo" playsinline muted autoplay></video>
+        <div class="barcode-guide"></div>
+        <div id="barcodeScanStatus" class="barcode-scan-status">מחפש ברקוד...</div>
+      </div>
+
+      <div class="barcode-controls">
+        <label id="barcodeZoomWrap" class="barcode-zoom hidden">
+          זום
+          <input id="barcodeZoom" type="range" min="1" max="1" step="0.1" value="1" />
+        </label>
+        <button id="barcodeTorchBtn" class="orange hidden" onclick="klcToggleTorchV23()">פנס</button>
+      </div>
+
+      <div class="actions barcode-actions">
+        <button class="gray" onclick="stopBarcodeScanner()">ביטול וסגירת מצלמה</button>
+      </div>
+
+      <div class="small">
+        אבטחה: המצלמה פעילה רק במסך זה. בסיום הסריקה או ביטול, זרם המצלמה נסגר.
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  return modal;
+}
+
+async function klcApplyCameraEnhancementsV23(){
+  const track = klcBarcodeStreamV23?.getVideoTracks?.()[0];
+  if(!track) return;
+
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  const settings = track.getSettings ? track.getSettings() : {};
+
+  // פוקוס רציף אם נתמך
+  try{
+    if(caps.focusMode && caps.focusMode.includes("continuous")){
+      await track.applyConstraints({advanced:[{focusMode:"continuous"}]});
+    }
+  }catch(e){}
+
+  // זום אם נתמך
+  const zoomWrap = document.getElementById("barcodeZoomWrap");
+  const zoomInput = document.getElementById("barcodeZoom");
+  if(caps.zoom && zoomInput && zoomWrap){
+    zoomWrap.classList.remove("hidden");
+    zoomInput.min = caps.zoom.min || 1;
+    zoomInput.max = caps.zoom.max || 1;
+    zoomInput.step = caps.zoom.step || 0.1;
+    const targetZoom = Math.min(caps.zoom.max || 1, Math.max(caps.zoom.min || 1, (settings.zoom || 1) + 1));
+    zoomInput.value = targetZoom;
+    try{ await track.applyConstraints({advanced:[{zoom: Number(targetZoom)}]}); }catch(e){}
+    zoomInput.oninput = async ()=>{
+      try{ await track.applyConstraints({advanced:[{zoom: Number(zoomInput.value)}]}); }catch(e){}
+    };
+  }else if(zoomWrap){
+    zoomWrap.classList.add("hidden");
+  }
+
+  // פנס אם נתמך
+  const torchBtn = document.getElementById("barcodeTorchBtn");
+  if(torchBtn && caps.torch){
+    torchBtn.classList.remove("hidden");
+    torchBtn.dataset.torch = "off";
+  }else if(torchBtn){
+    torchBtn.classList.add("hidden");
+  }
+}
+
+async function klcToggleTorchV23(){
+  const track = klcBarcodeStreamV23?.getVideoTracks?.()[0];
+  if(!track) return;
+  const btn = document.getElementById("barcodeTorchBtn");
+  const on = btn?.dataset?.torch !== "on";
+  try{
+    await track.applyConstraints({advanced:[{torch:on}]});
+    if(btn){
+      btn.dataset.torch = on ? "on" : "off";
+      btn.textContent = on ? "כבה פנס" : "פנס";
+    }
+  }catch(e){
+    alert("פנס לא נתמך במכשיר הזה");
+  }
+}
+
+function klcSetScanStatusV23(text){
+  const el = document.getElementById("barcodeScanStatus");
+  if(el) el.textContent = text;
+}
+
+function klcAcceptBarcodeV23(raw){
+  const val = String(raw || "").trim();
+  if(!val) return;
+
+  // דרישת יציבות: אותו ברקוד מזוהה פעמיים, כדי למנוע קריאה שגויה.
+  if(val === klcLastDetectedV23){
+    klcStableDetectedCountV23++;
+  }else{
+    klcLastDetectedV23 = val;
+    klcStableDetectedCountV23 = 1;
+  }
+
+  klcSetScanStatusV23(`זוהה: ${val}`);
+
+  if(klcStableDetectedCountV23 < 2) return;
+
+  const itemId = klcBarcodeTargetItemIdV23 || window.klcCurrentScanTarget;
+  if(itemId){
+    if(typeof klcSetBarcodeValue === "function") klcSetBarcodeValue(itemId, val);
+    const input = document.getElementById(`picked_model_${itemId}`) || document.getElementById(`barcode_${itemId}`);
+    if(input) input.value = val;
+  }
+
+  stopBarcodeScanner(false);
+  alert("הברקוד נסרק ונשמר בשדה. כעת לחץ לוקט.");
+}
+
+async function klcDetectFrameV23(video){
+  if(!klcBarcodeDetectorV23 || !video || video.readyState < 2) return;
+
+  // ניסיון 1: זיהוי ישיר מהווידאו
+  try{
+    const codes = await klcBarcodeDetectorV23.detect(video);
+    if(codes && codes.length){
+      klcAcceptBarcodeV23(codes[0].rawValue);
+      return;
+    }
+  }catch(e){}
+
+  // ניסיון 2: חיתוך מרכז התמונה והגדלה על Canvas.
+  // זה עוזר לברקודים קטנים כמו במדבקת מכנסיים.
+  try{
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if(!vw || !vh) return;
+
+    if(!klcBarcodeCanvasV23){
+      klcBarcodeCanvasV23 = document.createElement("canvas");
+      klcBarcodeCtxV23 = klcBarcodeCanvasV23.getContext("2d", {willReadFrequently:true});
+    }
+
+    // אזור מרכזי רחב, כי הברקוד לרוב אופקי/אנכי במרכז המסך
+    const cropW = Math.floor(vw * 0.72);
+    const cropH = Math.floor(vh * 0.42);
+    const sx = Math.floor((vw - cropW) / 2);
+    const sy = Math.floor((vh - cropH) / 2);
+
+    klcBarcodeCanvasV23.width = 1280;
+    klcBarcodeCanvasV23.height = 520;
+    klcBarcodeCtxV23.drawImage(video, sx, sy, cropW, cropH, 0, 0, klcBarcodeCanvasV23.width, klcBarcodeCanvasV23.height);
+
+    const codes2 = await klcBarcodeDetectorV23.detect(klcBarcodeCanvasV23);
+    if(codes2 && codes2.length){
+      klcAcceptBarcodeV23(codes2[0].rawValue);
+      return;
+    }
+  }catch(e){}
+}
+
+// שם הפונקציה נשאר זהה כדי שכל הכפתורים הקיימים ימשיכו לעבוד.
+async function startBarcodeScanner(itemId){
+  klcBarcodeTargetItemIdV23 = itemId;
+  window.klcCurrentScanTarget = itemId;
+  klcLastDetectedV23 = "";
+  klcStableDetectedCountV23 = 0;
+
+  const modal = klcEnsureBarcodeModalV23();
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    alert("הדפדפן לא מאפשר גישה למצלמה.");
+    return;
+  }
+
+  if(!("BarcodeDetector" in window)){
+    alert("סריקת ברקוד אוטומטית לא נתמכת בדפדפן הזה.");
+    return;
+  }
+
+  modal.classList.remove("hidden");
+  klcSetScanStatusV23("פותח מצלמה...");
+
+  try{
+    const video = document.getElementById("barcodeVideo");
+
+    klcBarcodeStreamV23 = await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1920},
+        height:{ideal:1080},
+        frameRate:{ideal:30}
+      },
+      audio:false
+    });
+
+    video.srcObject = klcBarcodeStreamV23;
+    await video.play();
+
+    await klcApplyCameraEnhancementsV23();
+
+    klcBarcodeDetectorV23 = new BarcodeDetector({
+      formats:[
+        "ean_13",
+        "ean_8",
+        "upc_a",
+        "upc_e",
+        "code_128",
+        "code_39",
+        "code_93",
+        "itf",
+        "codabar",
+        "qr_code"
+      ]
+    });
+
+    klcSetScanStatusV23("מחפש ברקוד...");
+
+    if(klcBarcodeTimerV23) clearInterval(klcBarcodeTimerV23);
+    klcBarcodeTimerV23 = setInterval(()=>klcDetectFrameV23(video), 160);
+
+  }catch(e){
+    stopBarcodeScanner(false);
+    alert("לא ניתנה הרשאה למצלמה או שהמצלמה אינה זמינה.");
+  }
+}
+
+function stopBarcodeScanner(showAlert=true){
+  if(klcBarcodeTimerV23){
+    clearInterval(klcBarcodeTimerV23);
+    klcBarcodeTimerV23 = null;
+  }
+
+  if(klcBarcodeStreamV23){
+    klcBarcodeStreamV23.getTracks().forEach(t=>t.stop());
+    klcBarcodeStreamV23 = null;
+  }
+
+  const video = document.getElementById("barcodeVideo");
+  if(video) video.srcObject = null;
+
+  const modal = document.getElementById("barcodeModal");
+  if(modal) modal.classList.add("hidden");
+
+  klcBarcodeTargetItemIdV23 = null;
+  window.klcCurrentScanTarget = null;
+  klcBarcodeDetectorV23 = null;
+  klcLastDetectedV23 = "";
+  klcStableDetectedCountV23 = 0;
+}
+
+// תאימות לשמות אחרים אם קיימים בקוד
+function openBarcodeScanner(itemId){ return startBarcodeScanner(itemId); }
+function scanBarcode(itemId){ return startBarcodeScanner(itemId); }
+
+// ===== KLC v2.4 - צבעי שורות + שמירת מיקס + תיקוני שורות עם מיקס =====
+function klcStatusRowClass(status){
+  if(status === "picked") return "picked picked-light";
+  if(status === "alt_mix") return "alt_mix alt-mix-light";
+  if(status === "not_found") return "not_found not-found-light";
+  return "";
+}
+function klcRegularActions(i){
+  const selectedMix = i.actual_mix || i.mix || "A";
+  return `<div class="actions regular-actions-final">
+    <button class="green" onclick="klcSaveItemStatus('${i.id}','picked')">לוקט</button>
+    <select id="mix_${i.id}" style="width:90px">${MIXES.map(m=>`<option value="${m}" ${m===selectedMix?"selected":""}>${m}</option>`).join("")}</select>
+    <button class="orange" onclick="klcSaveItemStatus('${i.id}','alt_mix',document.getElementById('mix_${i.id}').value)">לוקט מיקס אחר</button>
+    <button class="red" onclick="klcSaveItemStatus('${i.id}','not_found')">לא נמצא</button>
+    <button class="gray" onclick="klcSaveItemStatus('${i.id}','open')">בטל סימון</button>
+  </div>`;
+}
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect"))return;
+  const selectedId=workerWaveSelect.value;
+  workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
+  const w=waves.find(x=>x.id===selectedId)||waves[0];
+  if(!w){workerCards.innerHTML="";workerActions.innerHTML="";workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;nextWave.innerHTML="";return}
+  workerWaveSelect.value=w.id;
+  const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];
+  nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:"אין גל הבא כרגע";
+  const c=counts(w);
+  workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+  workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+  const sortedItems=typeof sortItemsByLocation==="function"?sortItemsByLocation(w.items):(w.items||[]);
+  const waveType=typeof klcWaveType==="function"?klcWaveType(w):(isPantsWave(w)?"pants":"regular");
+  workerItems.innerHTML=table(["מיקום","דגם","מיקס / מידה","כמות","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location||"ללא מיקום"),
+      waveType==="pants"?`<div class="pants-model-clean"><div class="pants-required-clean">${esc(i.model)}</div>${klcPantsInput(i)}</div>`:esc(i.model),
+      esc(i.mix||"A"),
+      esc(i.qty||1),
+      `${statusLabel(i.status)}${i.actual_mix?`<br><span class="small">מיקס שלוקט: ${esc(i.actual_mix)}</span>`:""}${i.picked_model?`<br><span class="small">${waveType==="pants"?"ברקוד":"דגם"}: ${esc(i.picked_model)}</span>`:""}`,
+      waveType==="pants"?klcPantsActions(i):klcRegularActions(i)
+    ]),
+    sortedItems.map(i=>klcStatusRowClass(i.status))
+  );
+}
+function correctionMixSelect(id, actualMix){
+  const selected=actualMix||"A";
+  return `<select id="corr_mix_${id}" style="min-width:90px">${MIXES.map(m=>`<option value="${m}" ${m===selected?"selected":""}>${m}</option>`).join("")}</select>`;
+}
+function correctionSelect(id, st, actualMix=""){
+  return `<div class="actions correction-actions">
+    <select id="corr_${id}" onchange="klcToggleCorrectionMix('${id}')">
+      <option value="picked" ${st==="picked"?"selected":""}>לוקט</option>
+      <option value="alt_mix" ${st==="alt_mix"?"selected":""}>לוקט מיקס אחר</option>
+      <option value="not_found" ${st==="not_found"?"selected":""}>לא נמצא</option>
+      <option value="open" ${st==="open"?"selected":""}>פתוח</option>
+    </select>
+    <span id="corr_mix_wrap_${id}" style="${st==="alt_mix"?"":"display:none"}">${correctionMixSelect(id, actualMix)}</span>
+    <button onclick="saveCorrection('${id}')">שמור</button>
+  </div>`;
+}
+function klcToggleCorrectionMix(id){
+  const st=document.getElementById(`corr_${id}`)?.value;
+  const wrap=document.getElementById(`corr_mix_wrap_${id}`);
+  if(wrap)wrap.style.display=st==="alt_mix"?"":"none";
+}
+function showCorrectionWave(id){
+  const rows=analytics.filter(r=>r.wave_id===id);
+  correctionItems.innerHTML=table(["דגם","מיקס","כמות","מיקום","סטטוס","מיקס בפועל","ברקוד/דגם שלוקט","תיקון"],
+    rows.map(r=>[esc(r.model),esc(r.mix),r.qty,esc(r.location||""),statusLabel(r.status),esc(r.actual_mix||""),esc(r.picked_model||""),correctionSelect(r.item_id,r.status,r.actual_mix||r.mix||"A")]),
+    rows.map(r=>klcStatusRowClass(r.status))
+  );
+}
+async function saveCorrection(id){
+  const st=document.getElementById(`corr_${id}`).value;
+  const mix=document.getElementById(`corr_mix_${id}`)?.value||"";
+  if(st==="alt_mix") await klcSaveItemStatus(id,st,mix,"");
+  else await klcSaveItemStatus(id,st,"","");
+  analytics=await api("/api/analytics");
+  renderCorrections();
+}
+setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},700);
