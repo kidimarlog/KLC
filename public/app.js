@@ -685,3 +685,331 @@ async function saveCorrection(id){
   renderCorrections();
 }
 setTimeout(()=>{if(me?.role==="worker")renderWorkerPage();},700);
+
+
+// ===== KLC v2.5 - מסך סטאטוס: לא משויכים למעלה, בביצוע, הושלמו =====
+
+function klcWaveIsCompleted(w){
+  if(w.status === "completed") return true;
+  const c = counts(w);
+  return c.total > 0 && c.done >= c.total;
+}
+
+function klcWaveIsActive(w){
+  return !!w.assigned_to && !klcWaveIsCompleted(w) && !["pallet_full"].includes(w.status);
+}
+
+function klcWaveIsUnassigned(w){
+  return !w.assigned_to && !klcWaveIsCompleted(w) && !["pallet_full"].includes(w.status);
+}
+
+function renderStatus(){
+  if(!document.getElementById("statusTable"))return;
+
+  const sorted = typeof sortWavesByStoreAsc === "function" ? sortWavesByStoreAsc(waves) : waves;
+
+  const allItems = sorted.flatMap(w=>w.items || []);
+  const total = allItems.reduce((s,i)=>s+Number(i.qty||1),0);
+  const done = allItems.filter(i=>i.status!=="open").reduce((s,i)=>s+Number(i.qty||1),0);
+
+  const unassigned = sorted.filter(klcWaveIsUnassigned);
+  const active = sorted.filter(klcWaveIsActive);
+  const completed = sorted.filter(klcWaveIsCompleted);
+
+  statusCards.innerHTML = `
+    <div class="card"><b>${sorted.length}</b><span>סה״כ גלים</span></div>
+    <div class="card"><b>${unassigned.length}</b><span>גלים לשיוך</span></div>
+    <div class="card"><b>${active.length}</b><span>גלים בביצוע</span></div>
+    <div class="card"><b>${completed.length}</b><span>גלים שהושלמו</span></div>
+  `;
+
+  const top = `
+    <div class="panel status-bulk-bar">
+      <b>גלים שטרם שויכו</b>
+      <label class="bulk-check-label">
+        <input type="checkbox" onchange="toggleAllStatusWaves(this)" />
+        סמן הכל
+      </label>
+      <button class="red" onclick="bulkDeleteStatusWaves()">מחק מסומנים</button>
+      <span class="small">הטבלה מציגה רק גלים שעדיין לא שויכו לעובד.</span>
+    </div>
+  `;
+
+  statusTable.innerHTML = top + table(
+    ["סימון","גל","סוג","חנות","סטטוס","יחידות","טופלו","אחוז","פעולה"],
+    unassigned.map(w=>{
+      const c=counts(w), p=percentForWave(w);
+      return [
+        `<input type="checkbox" class="status-wave-check" value="${esc(w.id)}" ${window.klcStatusSelectedWaves?.has(w.id)?"checked":""} onchange="rememberStatusCheck(this)" />`,
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        statusLabel(w.status),
+        c.total,
+        c.done,
+        progress(p),
+        `<button class="red" onclick="deleteWave('${w.id}','${esc(w.wave_no)}')">מחק שורה</button>`
+      ];
+    })
+  );
+
+  activeWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","עובד","סטטוס","יחידות","טופלו","אחוז","פעולה"],
+    active.map(w=>{
+      const c=counts(w), p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to || ""),
+        statusLabel(w.status),
+        c.total,
+        c.done,
+        progress(p),
+        `<button class="orange" onclick="unassignWave('${w.id}')">הסר שיוך</button>`
+      ];
+    })
+  );
+
+  unassignedWavesTable.innerHTML = table(
+    ["גל","סוג","חנות","עובד","יחידות","טופלו","אחוז","תאריך סיום","סיבת סגירה"],
+    completed.map(w=>{
+      const c=counts(w), p=percentForWave(w);
+      return [
+        esc(w.wave_no),
+        esc(w.source_label),
+        esc(w.store),
+        esc(w.assigned_to || ""),
+        c.total,
+        c.done,
+        progress(p),
+        esc(formatIL(w.closed_at) || ""),
+        esc(w.close_reason || (p===100 ? "100% טופל" : ""))
+      ];
+    })
+  );
+}
+
+setTimeout(()=>{ if(me?.role==="admin") renderStatus(); }, 1000);
+
+
+// ===== KLC v2.6 - ניתוח נתונים לפי עובד ומשימות =====
+// שורת הסינון והייצוא נשארת כמו שהיא.
+// התצוגה במסך מציגה סיכום משימות לפי עובד, ולחיצה על עובד מציגה פירוט.
+
+function klcAnalyticsCurrentRows(){
+  let rows = [...analytics];
+
+  if(filterWorker.value !== "all"){
+    rows = rows.filter(r => r.picked_by === filterWorker.value || r.assigned_to === filterWorker.value);
+  }
+
+  if(filterStatus.value !== "all"){
+    rows = rows.filter(r => r.status === filterStatus.value);
+  }
+
+  if(filterSourceType.value !== "all"){
+    rows = rows.filter(r => r.source_type === filterSourceType.value);
+  }
+
+  const dates = filterDates.value.split(",").map(x=>x.trim()).filter(Boolean);
+  if(dates.length){
+    rows = rows.filter(r => {
+      const d = r.picked_at || r.closed_at || "";
+      return dates.some(x => d.startsWith(x));
+    });
+  }
+
+  return rows;
+}
+
+function klcBuildWorkerTaskSummary(rows){
+  const by = {};
+
+  rows.forEach(r=>{
+    const worker = r.picked_by || r.assigned_to || "לא שויך";
+
+    if(!by[worker]){
+      by[worker] = {
+        worker,
+        rows:0,
+        picked:0,
+        alt_mix:0,
+        not_found:0,
+        open:0,
+        waves:new Set(),
+        stores:new Set()
+      };
+    }
+
+    by[worker].rows++;
+    by[worker].waves.add(r.wave_id);
+    if(r.store) by[worker].stores.add(r.store);
+
+    if(r.status === "picked") by[worker].picked++;
+    else if(r.status === "alt_mix") by[worker].alt_mix++;
+    else if(r.status === "not_found") by[worker].not_found++;
+    else by[worker].open++;
+  });
+
+  return Object.values(by).sort((a,b)=>a.worker.localeCompare(b.worker,"he"));
+}
+
+function klcAnalyticsPercent(done,total){
+  return total ? Math.round(done / total * 100) : 0;
+}
+
+function renderAnalytics(){
+  if(me?.role !== "admin" || !document.getElementById("filterWorker")) return;
+
+  const old = filterWorker.value || "all";
+  filterWorker.innerHTML = `<option value="all">כל העובדים</option>` + users.map(u=>`<option>${esc(u.username)}</option>`).join("");
+  filterWorker.value = old;
+
+  const rows = klcAnalyticsCurrentRows();
+  const workerSummary = klcBuildWorkerTaskSummary(rows);
+
+  const picked = rows.filter(r=>r.status==="picked").length;
+  const altMix = rows.filter(r=>r.status==="alt_mix").length;
+  const notFound = rows.filter(r=>r.status==="not_found").length;
+  const open = rows.filter(r=>r.status==="open").length;
+  const done = picked + altMix + notFound;
+
+  analyticsCards.innerHTML = `
+    <div class="card"><b>${rows.length}</b><span>שורות מסוננות</span></div>
+    <div class="card"><b>${picked}</b><span>לוקט</span></div>
+    <div class="card"><b>${altMix}</b><span>לוקט מיקס אחר</span></div>
+    <div class="card"><b>${notFound}</b><span>לא נמצא / אין מלאי</span></div>
+    <div class="card"><b>${open}</b><span>פתוח</span></div>
+    <div class="card"><b>${klcAnalyticsPercent(done, rows.length)}%</b><span>אחוז טיפול</span></div>
+  `;
+
+  workerSummaryTable.innerHTML = `
+    <div class="panel analytics-note">
+      <b>משימות לפי עובד</b><br>
+      לחץ על שם עובד כדי לראות פירוט משימות, ספירות וחנויות.
+    </div>
+  ` + table(
+    ["עובד","סה״כ שורות","לוקט","לוקט מיקס אחר","לא נמצא / אין מלאי","פתוח","גלים","חנויות","אחוז טיפול"],
+    workerSummary.map(o=>[
+      `<span class="clickable" onclick="showAnalyticsWorkerDetails('${esc(o.worker)}')">${esc(o.worker)}</span>`,
+      o.rows,
+      o.picked,
+      o.alt_mix,
+      o.not_found,
+      o.open,
+      o.waves.size,
+      o.stores.size,
+      progress(klcAnalyticsPercent(o.picked + o.alt_mix + o.not_found, o.rows))
+    ])
+  );
+
+  analyticsTable.innerHTML = `
+    <div class="panel">
+      בחר עובד מהטבלה למעלה כדי לראות פירוט משימות.  
+      הייצוא לאקסל ממשיך לעבוד לפי הסינונים העליונים.
+    </div>
+  `;
+}
+
+function showAnalyticsWorkerDetails(worker){
+  const rows = klcAnalyticsCurrentRows().filter(r => (r.picked_by || r.assigned_to || "לא שויך") === worker);
+
+  const picked = rows.filter(r=>r.status==="picked").length;
+  const altMix = rows.filter(r=>r.status==="alt_mix").length;
+  const notFound = rows.filter(r=>r.status==="not_found").length;
+  const open = rows.filter(r=>r.status==="open").length;
+
+  const byTask = {};
+  rows.forEach(r=>{
+    const key = `${r.wave_no || ""}||${r.store || ""}||${r.source_label || ""}`;
+    if(!byTask[key]){
+      byTask[key] = {
+        wave_no:r.wave_no,
+        store:r.store,
+        source_label:r.source_label,
+        rows:0,
+        picked:0,
+        alt_mix:0,
+        not_found:0,
+        open:0,
+        last_time:"",
+        wave_id:r.wave_id
+      };
+    }
+
+    const o = byTask[key];
+    o.rows++;
+    if(r.status === "picked") o.picked++;
+    else if(r.status === "alt_mix") o.alt_mix++;
+    else if(r.status === "not_found") o.not_found++;
+    else o.open++;
+
+    const t = r.picked_at || "";
+    if(t && (!o.last_time || t > o.last_time)) o.last_time = t;
+  });
+
+  const taskRows = Object.values(byTask).sort((a,b)=>{
+    const sa = storeSortNumber ? storeSortNumber(a.store) : 999999;
+    const sb = storeSortNumber ? storeSortNumber(b.store) : 999999;
+    return sa - sb || String(a.store||"").localeCompare(String(b.store||""),"he");
+  });
+
+  analyticsTable.innerHTML = `
+    <div class="panel analytics-worker-header">
+      <h3>פירוט משימות לעובד: ${esc(worker)}</h3>
+      <div class="cards">
+        <div class="card"><b>${rows.length}</b><span>סה״כ שורות</span></div>
+        <div class="card"><b>${picked}</b><span>לוקט</span></div>
+        <div class="card"><b>${altMix}</b><span>לוקט מיקס אחר</span></div>
+        <div class="card"><b>${notFound}</b><span>לא נמצא / אין מלאי</span></div>
+        <div class="card"><b>${open}</b><span>פתוח</span></div>
+      </div>
+    </div>
+  ` + table(
+    ["גל","סוג","חנות","סה״כ שורות","לוקט","לוקט מיקס אחר","לא נמצא / אין מלאי","פתוח","אחוז טיפול","עדכון אחרון","פירוט"],
+    taskRows.map(o=>[
+      esc(o.wave_no),
+      esc(o.source_label),
+      esc(o.store),
+      o.rows,
+      o.picked,
+      o.alt_mix,
+      o.not_found,
+      o.open,
+      progress(klcAnalyticsPercent(o.picked + o.alt_mix + o.not_found, o.rows)),
+      esc(formatIL(o.last_time) || ""),
+      `<button onclick="showAnalyticsTaskRows('${esc(worker)}','${esc(o.wave_id)}')">פתח שורות</button>`
+    ])
+  );
+}
+
+function showAnalyticsTaskRows(worker, waveId){
+  const rows = klcAnalyticsCurrentRows().filter(r =>
+    (r.picked_by || r.assigned_to || "לא שויך") === worker && r.wave_id === waveId
+  );
+
+  const details = table(
+    ["דגם","ברקוד/דגם שלוקט","מיקס","מיקס בפועל","כמות","מיקום","סטטוס","תאריך"],
+    rows.map(r=>[
+      esc(r.model),
+      esc(r.picked_model || ""),
+      esc(r.mix || ""),
+      esc(r.actual_mix || ""),
+      r.qty,
+      esc(r.location || ""),
+      statusLabel(r.status),
+      esc(formatIL(r.picked_at) || "")
+    ]),
+    rows.map(r=>typeof klcStatusRowClass === "function" ? klcStatusRowClass(r.status) : r.status)
+  );
+
+  analyticsTable.innerHTML += `
+    <div class="panel">
+      <h3>שורות בגל ${esc(rows[0]?.wave_no || "")} - ${esc(rows[0]?.store || "")}</h3>
+      ${details}
+    </div>
+  `;
+}
+
+setTimeout(()=>{ if(me?.role==="admin") renderAnalytics(); }, 1000);

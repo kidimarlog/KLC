@@ -155,3 +155,19 @@ tr.not-found-light,tr.not_found,#workerItems tr.not-found-light{background:#fef2
   #workerItems tr.alt-mix-light,#workerItems tr.alt_mix{background:#fff7ed!important}
   #workerItems tr.not-found-light,#workerItems tr.not_found{background:#fef2f2!important}
 }
+
+/* KLC v2.6 - ניתוח נתונים לפי עובד */
+.analytics-note,
+.analytics-worker-header {
+  border-right: 5px solid #2563eb !important;
+}
+
+.analytics-worker-header h3 {
+  margin-top: 0 !important;
+}
+
+@media(max-width:900px){
+  .analytics-worker-header .cards {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
