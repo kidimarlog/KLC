@@ -1013,3 +1013,170 @@ function showAnalyticsTaskRows(worker, waveId){
 }
 
 setTimeout(()=>{ if(me?.role==="admin") renderAnalytics(); }, 1000);
+
+
+// ===== KLC v2.7 - מסך עובד מסודר, כמות ליקוט, תאריך דוח וגיבוי =====
+
+window.klcPickedQtyDrafts = window.klcPickedQtyDrafts || {};
+
+function klcQtyOptions(item){
+  const reportQty=Math.max(1,Math.min(10,Number(item.qty||1)));
+  const selected=Number(window.klcPickedQtyDrafts[item.id] || item.picked_qty || reportQty);
+  return Array.from({length:10},(_,idx)=>idx+1)
+    .map(n=>`<option value="${n}" ${n===selected?"selected":""}>${n}</option>`).join("");
+}
+
+function klcSetPickedQty(itemId,value){
+  window.klcPickedQtyDrafts[itemId]=Number(value||1);
+}
+
+function klcPickedQty(itemId, fallback=1){
+  const el=document.getElementById(`picked_qty_${itemId}`);
+  return Number(el?.value || window.klcPickedQtyDrafts[itemId] || fallback || 1);
+}
+
+async function klcSaveItemStatus(itemId,status,actualMix="",barcode=""){
+  try{
+    const wave=waves.find(w=>(w.items||[]).some(i=>i.id===itemId));
+    const item=wave?.items?.find(i=>i.id===itemId);
+    const pickedQty=klcPickedQty(itemId,item?.qty||1);
+
+    if(barcode || status==="picked" || status==="not_found" || status==="open"){
+      await api("/api/item/status_barcode_v22",{
+        method:"POST",
+        body:JSON.stringify({itemId,status,actualMix,barcode,pickedQty})
+      });
+    }else{
+      await api("/api/item/status",{
+        method:"POST",
+        body:JSON.stringify({itemId,status,actualMix,pickedModel:"",pickedQty})
+      });
+    }
+
+    if(status==="open"){
+      delete window.klcBarcodeDrafts?.[itemId];
+      delete window.klcPickedQtyDrafts?.[itemId];
+    }
+
+    await refresh();
+  }catch(e){
+    alert(e.message||"לא ניתן לשמור את השורה");
+  }
+}
+
+function klcItemInfoBlock(i,waveType){
+  const modelHtml=waveType==="pants"
+    ? `<div class="worker-model-main">${esc(i.model)}</div>`
+    : `<div class="worker-model-main">${esc(i.model)}</div>`;
+
+  const sizeHtml=`<div class="worker-size-line"><b>מידה:</b> ${esc(i.mix||"A")}</div>`;
+
+  const scanHtml=waveType==="pants"
+    ? `<div class="worker-scan-line">${klcPantsInput(i)}</div>`
+    : "";
+
+  const qtyHtml=`<div class="worker-qty-line">
+    <label for="picked_qty_${i.id}"><b>כמות ליקוט:</b></label>
+    <select id="picked_qty_${i.id}" onchange="klcSetPickedQty('${i.id}',this.value)">
+      ${klcQtyOptions(i)}
+    </select>
+    <span class="small">כמות בדוח: ${esc(i.qty||1)}</span>
+  </div>`;
+
+  return `<div class="worker-item-info">${modelHtml}${sizeHtml}${scanHtml}${qtyHtml}</div>`;
+}
+
+function renderWorkerPage(){
+  if(!document.getElementById("workerWaveSelect"))return;
+
+  const selectedId=workerWaveSelect.value;
+  workerWaveSelect.innerHTML=waves.map(w=>`<option value="${esc(w.id)}">${esc(w.wave_no)} | ${esc(w.source_label)} | ${esc(w.store)}</option>`).join("")||"<option value='__none__'>אין גלי ליקוט</option>";
+
+  const w=waves.find(x=>x.id===selectedId)||waves[0];
+  if(!w){
+    workerCards.innerHTML="";
+    workerActions.innerHTML="";
+    workerItems.innerHTML=`<div class="panel">אין גלים משויכים כרגע.</div>`;
+    nextWave.innerHTML="";
+    return;
+  }
+
+  workerWaveSelect.value=w.id;
+  const idx=waves.findIndex(x=>x.id===w.id),next=waves[idx+1];
+  nextWave.innerHTML=next?`הגל הבא: <b>${esc(next.source_label)}</b> | <b>${esc(next.store)}</b> | ${next.items.length} שורות`:"אין גל הבא כרגע";
+
+  const c=counts(w);
+  workerCards.innerHTML=`<div class="card"><b>${esc(w.wave_no)}</b><span>גל</span></div><div class="card"><b>${esc(w.source_label)}</b><span>סוג גל</span></div><div class="card"><b>${esc(w.store)}</b><span>חנות</span></div><div class="card"><b>${c.total}</b><span>יחידות בדוח</span></div><div class="card"><b>${c.done}</b><span>טופלו</span></div><div class="card"><b>${c.total-c.done}</b><span>נשאר</span></div>`;
+
+  workerActions.innerHTML=`<div class="panel actions"><button class="orange" onclick="palletFull('${w.id}')">משטח מלא</button><button class="green" onclick="completeWave('${w.id}')">ליקוט הושלם - סגור משטח</button></div>`;
+
+  const sortedItems=typeof sortItemsByLocation==="function"?sortItemsByLocation(w.items):(w.items||[]);
+  const waveType=typeof klcWaveType==="function"?klcWaveType(w):(isPantsWave(w)?"pants":"regular");
+
+  workerItems.innerHTML=table(
+    ["מיקום","פרטי ליקוט","סטטוס","פעולות"],
+    sortedItems.map(i=>[
+      esc(i.location||"ללא מיקום"),
+      klcItemInfoBlock(i,waveType),
+      `${statusLabel(i.status)}${i.actual_mix?`<br><span class="small">מיקס שלוקט: ${esc(i.actual_mix)}</span>`:""}${i.picked_model?`<br><span class="small">${waveType==="pants"?"ברקוד":"דגם"}: ${esc(i.picked_model)}</span>`:""}${i.picked_qty?`<br><span class="small">כמות שלוקטה: ${esc(i.picked_qty)}</span>`:""}`,
+      waveType==="pants"?klcPantsActions(i):klcRegularActions(i)
+    ]),
+    sortedItems.map(i=>typeof klcStatusRowClass==="function"?klcStatusRowClass(i.status):i.status)
+  );
+}
+
+async function loadImportDates(){
+  if(!document.getElementById("filterDates"))return;
+  const current=filterDates.value||"";
+  const dates=await api("/api/import-dates").catch(()=>[]);
+  filterDates.innerHTML=`<option value="">כל תאריכי העלאת הדוחות</option>`+
+    dates.map(d=>`<option value="${esc(d)}">${esc(new Date(d+"T12:00:00").toLocaleDateString("he-IL"))}</option>`).join("");
+  filterDates.value=current;
+}
+
+function klcAnalyticsCurrentRows(){
+  let rows=[...analytics];
+
+  if(filterWorker.value!=="all")rows=rows.filter(r=>r.picked_by===filterWorker.value||r.assigned_to===filterWorker.value);
+  if(filterStatus.value!=="all")rows=rows.filter(r=>r.status===filterStatus.value);
+  if(filterSourceType.value!=="all")rows=rows.filter(r=>r.source_type===filterSourceType.value);
+
+  const reportDate=filterDates.value||"";
+  if(reportDate)rows=rows.filter(r=>String(r.import_created_at||"").startsWith(reportDate));
+
+  return rows;
+}
+
+function exportAnalytics(){
+  window.location=`/api/analytics/export?worker=${encodeURIComponent(filterWorker.value)}&status=${encodeURIComponent(filterStatus.value)}&sourceType=${encodeURIComponent(filterSourceType.value)}&dates=${encodeURIComponent(filterDates.value||"")}`;
+}
+
+async function downloadBackup(){
+  window.location="/api/backup";
+}
+
+async function restoreBackup(){
+  const file=document.getElementById("restoreBackupFile")?.files?.[0];
+  if(!file)return alert("בחר קובץ גיבוי JSON");
+  if(!confirm("שחזור גיבוי יחליף את כל הנתונים הקיימים במערכת. להמשיך?"))return;
+
+  try{
+    const text=await file.text();
+    const data=JSON.parse(text);
+    await api("/api/restore",{method:"POST",body:JSON.stringify({data,overwrite:true})});
+    alert("הגיבוי שוחזר בהצלחה");
+    await refresh();
+    await loadImports();
+  }catch(e){
+    alert(e.message||"שחזור הגיבוי נכשל");
+  }
+}
+
+// טוען תאריכי דוחות בעת כניסת מנהל
+const klcOriginalRefreshV27=refresh;
+refresh=async function(){
+  await klcOriginalRefreshV27();
+  if(me?.role==="admin")await loadImportDates();
+};
+
+setTimeout(()=>{if(me?.role==="admin")loadImportDates();},900);
