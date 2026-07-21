@@ -1,6 +1,6 @@
 {
   "name": "klc-web",
-  "version": "2.9.1",
+  "version": "2.9.2",
   "description": "KLC - Kidichic Logistics Center",
   "main": "server.js",
   "scripts": {

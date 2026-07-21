@@ -1020,9 +1020,13 @@ setTimeout(()=>{ if(me?.role==="admin") renderAnalytics(); }, 1000);
 window.klcPickedQtyDrafts = window.klcPickedQtyDrafts || {};
 
 function klcQtyOptions(item){
-  const reportQty=Math.max(1,Math.min(10,Number(item.qty||1)));
-  const selected=Number(window.klcPickedQtyDrafts[item.id] || item.picked_qty || reportQty);
-  return Array.from({length:10},(_,idx)=>idx+1)
+  const rawReportQty=Number(item.qty);
+  const reportQty=Number.isFinite(rawReportQty)&&rawReportQty>0?rawReportQty:1;
+  const draft=window.klcPickedQtyDrafts[item.id];
+  const saved=Number(item.picked_qty);
+  const selected=draft!==undefined?Number(draft):(Number.isFinite(saved)&&saved>0?saved:reportQty);
+  const maxOption=Math.max(10,Math.ceil(reportQty),Math.ceil(selected));
+  return Array.from({length:maxOption},(_,idx)=>idx+1)
     .map(n=>`<option value="${n}" ${n===selected?"selected":""}>${n}</option>`).join("");
 }
 
