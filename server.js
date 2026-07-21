@@ -62,6 +62,49 @@ app.post('/api/restore',admin,async(req,res)=>{
   }
 });
 
+
+
+// KLC v2.8 - תיקוני שורות מנהל: ברקוד נשמר רק בסטטוס לוקט
+app.post("/api/item/admin-correction-v28", admin, async (req,res)=>{
+  const itemId=String(req.body.itemId||req.body.item_id||"").trim();
+  const status=String(req.body.status||"").trim();
+  const actualMix=String(req.body.actualMix||req.body.actual_mix||"").trim();
+  let barcode=String(req.body.barcode||req.body.pickedModel||req.body.picked_model||"").trim();
+  const requestedQty=Number(req.body.pickedQty||0);
+
+  const allowedStatuses=new Set(["picked","alt_mix","not_found","open"]);
+  if(!allowedStatuses.has(status)) return res.status(400).json({error:"סטטוס לא תקין"});
+
+  const item=await get(`SELECT wi.*,w.source_type,w.source_label,w.id AS wave_id
+    FROM wave_items wi JOIN waves w ON w.id=wi.wave_id WHERE wi.id=?`,[itemId]);
+  if(!item) return res.status(404).json({error:"פריט לא נמצא"});
+
+  const isPants=String(item.source_type||"").toLowerCase()==="pants" || String(item.source_label||"").includes("מכנס");
+
+  // בגל השלמת מכנסיים ברקוד/דגם שלוקט מותר רק כאשר הסטטוס הוא לוקט.
+  if(isPants && status==="picked" && !barcode){
+    return res.status(400).json({error:"יש להזין ברקוד / דגם שלוקט לפני שמירת סטטוס לוקט"});
+  }
+  if(isPants && status!=="picked") barcode="";
+
+  // בגלים אחרים אין שימוש בשדה ברקוד דרך מסך התיקונים.
+  if(!isPants) barcode="";
+
+  const pickedQty=Number.isFinite(requestedQty)&&requestedQty>0 ? requestedQty : Number(item.picked_qty||item.qty||1);
+  const correctedBy=req.session.user.username;
+  const correctedAt=now();
+
+  if(status==="open"){
+    await run(`UPDATE wave_items SET status='open',actual_mix='',picked_model='',picked_qty=NULL,picked_by='',picked_at='' WHERE id=?`,[itemId]);
+  }else{
+    await run(`UPDATE wave_items SET status=?,actual_mix=?,picked_model=?,picked_qty=?,picked_by=?,picked_at=? WHERE id=?`,
+      [status,status==="alt_mix"?actualMix:"",barcode,pickedQty,correctedBy,correctedAt,itemId]);
+    await run("UPDATE waves SET status='active' WHERE id=? AND status IN ('open','assigned')",[item.wave_id]);
+  }
+
+  res.json({ok:true,barcode,status,actualMix:status==="alt_mix"?actualMix:"",pickedQty});
+});
+
 init().then(()=>app.listen(PORT,()=>console.log('KLC v2.0 running on port '+PORT)));
 
 

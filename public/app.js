@@ -1180,3 +1180,119 @@ refresh=async function(){
 };
 
 setTimeout(()=>{if(me?.role==="admin")loadImportDates();},900);
+
+
+// ===== KLC v2.8 - ברקוד/דגם שלוקט במסך תיקוני שורות =====
+function klcCorrectionIsPants(row){
+  const type=String(row?.source_type||"").toLowerCase();
+  const label=String(row?.source_label||"");
+  return type==="pants" || label.includes("מכנס");
+}
+
+function klcCorrectionBarcodeInput(row){
+  if(!klcCorrectionIsPants(row)) return `<span class="small">לא רלוונטי לסוג גל זה</span>`;
+  const enabled=row.status==="picked";
+  return `<input
+    id="corr_barcode_${row.item_id}"
+    class="correction-barcode-input"
+    type="text"
+    inputmode="numeric"
+    autocomplete="off"
+    value="${esc(row.picked_model||"")}"
+    placeholder="ברקוד / דגם שלוקט"
+    ${enabled?"":"disabled"}
+    onkeydown="if(event.key==='Enter'){event.preventDefault();saveCorrection('${row.item_id}')}"
+  />`;
+}
+
+function correctionSelect(id,st,actualMix="",isPants=false){
+  return `<div class="actions correction-actions">
+    <select id="corr_${id}" onchange="klcCorrectionStatusChanged('${id}',${isPants})">
+      <option value="picked" ${st==="picked"?"selected":""}>לוקט</option>
+      <option value="alt_mix" ${st==="alt_mix"?"selected":""}>לוקט מיקס אחר</option>
+      <option value="not_found" ${st==="not_found"?"selected":""}>לא נמצא</option>
+      <option value="open" ${st==="open"?"selected":""}>פתוח</option>
+    </select>
+    <span id="corr_mix_wrap_${id}" style="${st==="alt_mix"&&!isPants?"":"display:none"}">${correctionMixSelect(id,actualMix)}</span>
+    <button onclick="saveCorrection('${id}')">שמור</button>
+  </div>`;
+}
+
+function klcCorrectionStatusChanged(id,isPants){
+  const status=document.getElementById(`corr_${id}`)?.value||"open";
+  const mixWrap=document.getElementById(`corr_mix_wrap_${id}`);
+  if(mixWrap) mixWrap.style.display=status==="alt_mix"&&!isPants?"":"none";
+
+  const barcodeInput=document.getElementById(`corr_barcode_${id}`);
+  if(barcodeInput){
+    const allow=status==="picked";
+    barcodeInput.disabled=!allow;
+    if(!allow) barcodeInput.value="";
+    if(allow) setTimeout(()=>barcodeInput.focus(),0);
+  }
+}
+
+function showCorrectionWave(id){
+  const rows=analytics.filter(r=>r.wave_id===id);
+  correctionItems.innerHTML=table(
+    ["דגם","מיקס","כמות בדוח","כמות ליקוט","מיקום","סטטוס","מיקס בפועל","ברקוד / דגם שלוקט","תיקון"],
+    rows.map(r=>{
+      const pants=klcCorrectionIsPants(r);
+      return [
+        esc(r.model),
+        esc(r.mix),
+        r.qty,
+        esc(r.picked_qty||r.qty||1),
+        esc(r.location||""),
+        statusLabel(r.status),
+        esc(r.actual_mix||""),
+        klcCorrectionBarcodeInput(r),
+        correctionSelect(r.item_id,r.status,r.actual_mix||r.mix||"A",pants)
+      ];
+    }),
+    rows.map(r=>typeof klcStatusRowClass==="function"?klcStatusRowClass(r.status):r.status)
+  );
+}
+
+async function saveCorrection(id){
+  const row=analytics.find(r=>r.item_id===id);
+  if(!row){alert("השורה לא נמצאה");return;}
+
+  const status=document.getElementById(`corr_${id}`)?.value||"open";
+  const isPants=klcCorrectionIsPants(row);
+  const mix=status==="alt_mix"&&!isPants ? (document.getElementById(`corr_mix_${id}`)?.value||"") : "";
+  const barcodeInput=document.getElementById(`corr_barcode_${id}`);
+  let barcode=String(barcodeInput?.value||"").trim();
+
+  if(isPants && status==="picked" && !barcode){
+    alert("יש להזין ברקוד / דגם שלוקט לפני שמירת סטטוס לוקט");
+    barcodeInput?.focus();
+    return;
+  }
+
+  if(isPants && status!=="picked"){
+    barcode="";
+    if(barcodeInput) barcodeInput.value="";
+  }
+
+  try{
+    await api("/api/item/admin-correction-v28",{
+      method:"POST",
+      body:JSON.stringify({
+        itemId:id,
+        status,
+        actualMix:mix,
+        barcode,
+        pickedQty:Number(row.picked_qty||row.qty||1)
+      })
+    });
+
+    analytics=await api("/api/analytics");
+    await refresh();
+    const waveId=row.wave_id;
+    showCorrectionWave(waveId);
+    alert("השורה נשמרה בהצלחה");
+  }catch(e){
+    alert(e.message||"לא ניתן לשמור את השורה");
+  }
+}
